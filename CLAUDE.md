@@ -6,7 +6,7 @@ Plan: `/Users/hughkoeze/Code/Super Grader/planning/harkness-helper-v2.md`
 
 ## Status
 
-See [`../BUILD_PLAN.md`](../BUILD_PLAN.md) for ecosystem-wide milestones and current state. M2a covers the remaining Harkness work (Canvas client + cache, audio recorder, upload form, Inngest transcription, super-grader webhook + prompt-pull endpoint).
+See [`../BUILD_PLAN.md`](../BUILD_PLAN.md) ([on GitHub](https://github.com/hughsibbele/super-grader-suite/blob/main/BUILD_PLAN.md)) for ecosystem-wide milestones and current state. M2a covers the remaining Harkness work (Canvas client + cache, audio recorder, upload form, Inngest transcription, super-grader webhook + prompt-pull endpoint).
 
 ## Supabase project
 
