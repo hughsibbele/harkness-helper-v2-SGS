@@ -54,7 +54,7 @@ export default async function DashboardPage() {
       supabase
         .from("discussions")
         .select(
-          "id,recorded_at,state,error_message,canvas_course_id,canvas_assignment_id,canvas_section_id,audio_url",
+          "id,recorded_at,state,error_message,canvas_course_id,canvas_assignment_id,canvas_section_id,audio_url,transcript",
         )
         .eq("teacher_id", teacher.id)
         .gte("recorded_at", academicYearStart())
@@ -121,6 +121,7 @@ export default async function DashboardPage() {
     canvas_assignment_id: d.canvas_assignment_id,
     canvas_section_id: d.canvas_section_id,
     audio_signed_url: signedUrls[i] ?? null,
+    has_transcript: !!d.transcript && d.transcript.length > 0,
   }));
 
   return (

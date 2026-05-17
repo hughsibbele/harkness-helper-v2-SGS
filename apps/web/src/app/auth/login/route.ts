@@ -14,9 +14,18 @@ export async function GET(request: NextRequest) {
     provider: "google",
     options: {
       redirectTo: callbackUrl.toString(),
+      // drive.file = create + manage files this app creates (not user's
+      // existing files); documents = edit any Doc the app has access to.
+      // access_type=offline returns a refresh_token (only on first
+      // consent per Google's behavior) so server-side calls can outlive
+      // the 1-hour access_token.
+      scopes:
+        "https://www.googleapis.com/auth/drive.file " +
+        "https://www.googleapis.com/auth/documents",
       queryParams: {
         hd: "episcopalhighschool.org",
         prompt: "select_account",
+        access_type: "offline",
       },
     },
   });

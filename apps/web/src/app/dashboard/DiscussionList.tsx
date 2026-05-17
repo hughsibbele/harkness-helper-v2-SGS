@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { DeleteDiscussionButton } from "./DeleteDiscussionButton";
+import { SaveToDriveMenu } from "./SaveToDriveMenu";
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -22,6 +23,7 @@ export type DiscussionListRow = {
   canvas_assignment_id: string;
   canvas_section_id: string | null;
   audio_signed_url: string | null;
+  has_transcript: boolean;
 };
 
 const STATE_STYLES: Record<DiscussionState, { dot: string; label: string }> = {
@@ -169,7 +171,14 @@ export function DiscussionList({
                       {formatDate(d.recorded_at)}
                     </span>
                   </div>
-                  <DeleteDiscussionButton discussionId={d.id} />
+                  <div className="flex items-center gap-2">
+                    <SaveToDriveMenu
+                      discussionId={d.id}
+                      hasAudio={d.audio_signed_url !== null}
+                      hasTranscript={d.has_transcript}
+                    />
+                    <DeleteDiscussionButton discussionId={d.id} />
+                  </div>
                 </div>
                 <div className="mt-1 flex items-center gap-2 text-xs">
                   <span

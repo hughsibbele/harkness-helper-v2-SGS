@@ -27,6 +27,9 @@ export type Database = {
           display_name: string;
           gemini_daily_cap: number | null;
           last_canvas_sync_at: string | null;
+          google_access_token: string | null;
+          google_refresh_token: string | null;
+          google_token_expires_at: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -38,6 +41,9 @@ export type Database = {
           display_name: string;
           gemini_daily_cap?: number | null;
           last_canvas_sync_at?: string | null;
+          google_access_token?: string | null;
+          google_refresh_token?: string | null;
+          google_token_expires_at?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -49,6 +55,9 @@ export type Database = {
           display_name?: string;
           gemini_daily_cap?: number | null;
           last_canvas_sync_at?: string | null;
+          google_access_token?: string | null;
+          google_refresh_token?: string | null;
+          google_token_expires_at?: string | null;
           created_at?: string;
           updated_at?: string;
         };

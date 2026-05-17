@@ -17,16 +17,15 @@ export async function GET(request: NextRequest) {
   if (!code) return redirectWithError(request, "missing_code");
 
   const supabase = await getServerDbClient();
-  const { error: exchangeError } =
+  const { data: exchanged, error: exchangeError } =
     await supabase.auth.exchangeCodeForSession(code);
 
   if (exchangeError) {
     return redirectWithError(request, exchangeError.message);
   }
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const session = exchanged.session;
+  const user = exchanged.user;
 
   if (!user || !user.email) {
     return redirectWithError(request, "no_user");
@@ -49,8 +48,31 @@ export async function GET(request: NextRequest) {
     email.split("@")[0]!;
 
   // Service-role upsert — teachers has no INSERT policy by design.
+  // We also capture Google OAuth provider tokens so server-side Drive/Docs
+  // calls work later. Refresh_token is only returned on first consent per
+  // Google's behavior — preserve any existing one if this sign-in didn't
+  // include a fresh one.
+  const providerToken = session?.provider_token ?? null;
+  const providerRefreshToken = session?.provider_refresh_token ?? null;
+  // Supabase's session.expires_in is for the Supabase JWT, not the Google
+  // token. Google access tokens are 1h; conservatively expire ours at
+  // 55min so we refresh before the boundary.
+  const tokenExpiresAt = providerToken
+    ? new Date(Date.now() + 55 * 60 * 1000).toISOString()
+    : null;
+
   try {
     const admin = createAdminDbClient();
+    const tokenUpdates: Record<string, string> = {};
+    if (providerToken) {
+      tokenUpdates.google_access_token = providerToken;
+    }
+    if (tokenExpiresAt) {
+      tokenUpdates.google_token_expires_at = tokenExpiresAt;
+    }
+    if (providerRefreshToken) {
+      tokenUpdates.google_refresh_token = providerRefreshToken;
+    }
     const { error: upsertError } = await admin
       .from("teachers")
       .upsert(
@@ -59,6 +81,7 @@ export async function GET(request: NextRequest) {
           email,
           display_name: displayName,
           google_sub: googleSub,
+          ...tokenUpdates,
         },
         { onConflict: "auth_user_id" }
       )
