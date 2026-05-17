@@ -2,7 +2,11 @@ import { getCurrentTeacher } from "@/lib/auth/teacher";
 import { getServerDbClient } from "@/lib/supabase/server";
 import { CanvasSyncButton } from "./CanvasSyncButton";
 import { RecordingFlow } from "./RecordingFlow";
-import type { AssignmentOption, CourseOption } from "./TargetPicker";
+import type {
+  AssignmentOption,
+  CourseOption,
+  RosterStudent,
+} from "./TargetPicker";
 
 function formatSyncedAt(iso: string | null): string {
   if (!iso) return "never";
@@ -17,7 +21,7 @@ export default async function DashboardPage() {
   const teacher = await getCurrentTeacher();
   const supabase = await getServerDbClient();
 
-  const [coursesRes, assignmentsRes] = await Promise.all([
+  const [coursesRes, assignmentsRes, rostersRes] = await Promise.all([
     supabase
       .from("canvas_course_cache")
       .select("canvas_course_id,name,course_code")
@@ -28,6 +32,10 @@ export default async function DashboardPage() {
       .select("canvas_course_id,canvas_assignment_id,name,due_at")
       .eq("teacher_id", teacher.id)
       .eq("workflow_state", "published"),
+    supabase
+      .from("course_rosters")
+      .select("canvas_course_id,students")
+      .eq("teacher_id", teacher.id),
   ]);
 
   const courses: CourseOption[] = (coursesRes.data ?? []).map((c) => ({
@@ -41,6 +49,15 @@ export default async function DashboardPage() {
     name: a.name,
     due_at: a.due_at,
   }));
+  const rostersByCourseId: Record<string, RosterStudent[]> = {};
+  for (const row of rostersRes.data ?? []) {
+    const students = Array.isArray(row.students)
+      ? (row.students as RosterStudent[])
+      : [];
+    rostersByCourseId[row.canvas_course_id] = students.sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+  }
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -50,7 +67,11 @@ export default async function DashboardPage() {
         </h1>
       </header>
 
-      <RecordingFlow courses={courses} assignments={assignments} />
+      <RecordingFlow
+        courses={courses}
+        assignments={assignments}
+        rostersByCourseId={rostersByCourseId}
+      />
 
       <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-stone-200 pt-4 text-xs text-cool-gray">
         <span>

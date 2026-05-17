@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 export type CourseOption = {
   canvas_course_id: string;
@@ -15,27 +15,59 @@ export type AssignmentOption = {
   due_at: string | null;
 };
 
+export type RosterStudent = {
+  canvas_user_id: string;
+  name: string;
+  email: string | null;
+};
+
 export type TargetSelection = {
   course: CourseOption | null;
   assignment: AssignmentOption | null;
+  participantIds: string[];
 };
 
 export function TargetPicker({
   courses,
   assignments,
+  rostersByCourseId,
   onChange,
 }: {
   courses: CourseOption[];
   assignments: AssignmentOption[];
+  rostersByCourseId: Record<string, RosterStudent[]>;
   onChange?: (selection: TargetSelection) => void;
 }) {
   const [courseId, setCourseId] = useState<string | null>(null);
   const [assignmentId, setAssignmentId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [participantIds, setParticipantIds] = useState<Set<string>>(new Set());
 
-  const selectedCourse = courses.find((c) => c.canvas_course_id === courseId) ?? null;
+  const selectedCourse =
+    courses.find((c) => c.canvas_course_id === courseId) ?? null;
   const selectedAssignment =
     assignments.find((a) => a.canvas_assignment_id === assignmentId) ?? null;
+  const roster = courseId ? (rostersByCourseId[courseId] ?? []) : [];
+
+  // Default participants to "all in this course" whenever the course changes.
+  useEffect(() => {
+    if (courseId) {
+      setParticipantIds(
+        new Set((rostersByCourseId[courseId] ?? []).map((s) => s.canvas_user_id)),
+      );
+    } else {
+      setParticipantIds(new Set());
+    }
+  }, [courseId, rostersByCourseId]);
+
+  // Notify parent on any change. The effect makes this a single source of truth.
+  useEffect(() => {
+    onChange?.({
+      course: selectedCourse,
+      assignment: selectedAssignment,
+      participantIds: Array.from(participantIds),
+    });
+  }, [selectedCourse, selectedAssignment, participantIds, onChange]);
 
   const visibleAssignments = useMemo(
     () => sortAndFilterAssignments(assignments, courseId, query),
@@ -44,32 +76,36 @@ export function TargetPicker({
 
   function pickCourse(id: string | null) {
     setCourseId(id);
-    // If the currently-selected assignment doesn't belong to this course,
-    // drop it. Last pick wins — picking a course wins over a stale assignment.
     if (id && selectedAssignment && selectedAssignment.canvas_course_id !== id) {
       setAssignmentId(null);
-      onChange?.({
-        course: courses.find((c) => c.canvas_course_id === id) ?? null,
-        assignment: null,
-      });
-      return;
     }
-    onChange?.({
-      course: courses.find((c) => c.canvas_course_id === id) ?? null,
-      assignment: selectedAssignment,
-    });
   }
 
   function pickAssignment(a: AssignmentOption) {
     setAssignmentId(a.canvas_assignment_id);
-    // Auto-snap course to the assignment's owner. Last pick wins.
     if (a.canvas_course_id !== courseId) {
       setCourseId(a.canvas_course_id);
     }
-    onChange?.({
-      course: courses.find((c) => c.canvas_course_id === a.canvas_course_id) ?? null,
-      assignment: a,
+  }
+
+  function toggleParticipant(canvasUserId: string) {
+    setParticipantIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(canvasUserId)) {
+        next.delete(canvasUserId);
+      } else {
+        next.add(canvasUserId);
+      }
+      return next;
     });
+  }
+
+  function selectAllParticipants() {
+    setParticipantIds(new Set(roster.map((s) => s.canvas_user_id)));
+  }
+
+  function deselectAllParticipants() {
+    setParticipantIds(new Set());
   }
 
   return (
@@ -137,6 +173,57 @@ export function TargetPicker({
         </ul>
       </div>
 
+      {courseId && (
+        <div>
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="text-xs uppercase tracking-wide text-cool-gray">
+              Participants ({participantIds.size}/{roster.length})
+            </span>
+            <div className="flex gap-2 text-xs">
+              <button
+                type="button"
+                onClick={selectAllParticipants}
+                className="text-cool-gray underline-offset-2 hover:text-ink hover:underline"
+              >
+                Select all
+              </button>
+              <span className="text-stone-300">·</span>
+              <button
+                type="button"
+                onClick={deselectAllParticipants}
+                className="text-cool-gray underline-offset-2 hover:text-ink hover:underline"
+              >
+                Deselect all
+              </button>
+            </div>
+          </div>
+          <ul className="max-h-56 overflow-y-auto rounded-md border border-stone-200 bg-white">
+            {roster.length === 0 && (
+              <li className="px-3 py-2 text-sm text-cool-gray">
+                No roster cached for this course. Refresh Canvas if you just
+                added students.
+              </li>
+            )}
+            {roster.map((s) => {
+              const checked = participantIds.has(s.canvas_user_id);
+              return (
+                <li key={s.canvas_user_id}>
+                  <label className="flex cursor-pointer items-center gap-3 px-3 py-1.5 text-sm hover:bg-stone-100">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleParticipant(s.canvas_user_id)}
+                      className="h-4 w-4 rounded border-stone-300 text-ink focus:ring-stone-500"
+                    />
+                    <span className="truncate text-ink">{s.name}</span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
       {selectedCourse && selectedAssignment && (
         <div className="rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-cool-gray">
           Recording will be linked to{" "}
@@ -145,6 +232,15 @@ export function TargetPicker({
           <span className="font-medium text-ink">
             {selectedCourse.course_code ?? selectedCourse.name}
           </span>
+          {participantIds.size > 0 && (
+            <>
+              {" "}with{" "}
+              <span className="font-medium text-ink">
+                {participantIds.size} participant
+                {participantIds.size === 1 ? "" : "s"}
+              </span>
+            </>
+          )}
           .
         </div>
       )}
