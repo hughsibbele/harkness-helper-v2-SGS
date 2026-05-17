@@ -1,6 +1,8 @@
+import { createAdminDbClient } from "@harkness-helper/db/admin";
 import { getCurrentTeacher } from "@/lib/auth/teacher";
 import { getServerDbClient } from "@/lib/supabase/server";
 import { CanvasSyncButton } from "./CanvasSyncButton";
+import { DiscussionList, type DiscussionListRow } from "./DiscussionList";
 import { RecordingFlow } from "./RecordingFlow";
 import type {
   AssignmentOption,
@@ -9,6 +11,9 @@ import type {
   CourseSection,
   RosterStudent,
 } from "./TargetPicker";
+
+const RECENT_DISCUSSIONS_LIMIT = 10;
+const SIGNED_URL_TTL_SECONDS = 60 * 60; // 1 hour
 
 function formatSyncedAt(iso: string | null): string {
   if (!iso) return "never";
@@ -22,23 +27,33 @@ function formatSyncedAt(iso: string | null): string {
 export default async function DashboardPage() {
   const teacher = await getCurrentTeacher();
   const supabase = await getServerDbClient();
+  const admin = createAdminDbClient();
 
-  const [coursesRes, assignmentsRes, rostersRes] = await Promise.all([
-    supabase
-      .from("canvas_course_cache")
-      .select("canvas_course_id,name,course_code")
-      .eq("teacher_id", teacher.id)
-      .order("name"),
-    supabase
-      .from("canvas_assignment_cache")
-      .select("canvas_course_id,canvas_assignment_id,name,due_at")
-      .eq("teacher_id", teacher.id)
-      .eq("workflow_state", "published"),
-    supabase
-      .from("course_rosters")
-      .select("canvas_course_id,students,sections")
-      .eq("teacher_id", teacher.id),
-  ]);
+  const [coursesRes, assignmentsRes, rostersRes, discussionsRes] =
+    await Promise.all([
+      supabase
+        .from("canvas_course_cache")
+        .select("canvas_course_id,name,course_code")
+        .eq("teacher_id", teacher.id)
+        .order("name"),
+      supabase
+        .from("canvas_assignment_cache")
+        .select("canvas_course_id,canvas_assignment_id,name,due_at")
+        .eq("teacher_id", teacher.id)
+        .eq("workflow_state", "published"),
+      supabase
+        .from("course_rosters")
+        .select("canvas_course_id,students,sections")
+        .eq("teacher_id", teacher.id),
+      supabase
+        .from("discussions")
+        .select(
+          "id,recorded_at,state,error_message,canvas_course_id,canvas_assignment_id,audio_url",
+        )
+        .eq("teacher_id", teacher.id)
+        .order("created_at", { ascending: false })
+        .limit(RECENT_DISCUSSIONS_LIMIT),
+    ]);
 
   const courses: CourseOption[] = (coursesRes.data ?? []).map((c) => ({
     canvas_course_id: c.canvas_course_id,
@@ -65,6 +80,35 @@ export default async function DashboardPage() {
     };
   }
 
+  const courseLabelById: Record<string, string> = {};
+  for (const c of courses) {
+    courseLabelById[c.canvas_course_id] = c.course_code ?? c.name;
+  }
+  const assignmentLabelById: Record<string, string> = {};
+  for (const a of assignments) {
+    assignmentLabelById[a.canvas_assignment_id] = a.name;
+  }
+
+  // Generate signed URLs for recent discussions' audio (private bucket).
+  const rawDiscussions = discussionsRes.data ?? [];
+  const signedUrls = await Promise.all(
+    rawDiscussions.map(async (d) => {
+      const { data } = await admin.storage
+        .from("discussion-audio")
+        .createSignedUrl(d.audio_url, SIGNED_URL_TTL_SECONDS);
+      return data?.signedUrl ?? null;
+    }),
+  );
+  const discussions: DiscussionListRow[] = rawDiscussions.map((d, i) => ({
+    id: d.id,
+    recorded_at: d.recorded_at,
+    state: d.state,
+    error_message: d.error_message,
+    canvas_course_id: d.canvas_course_id,
+    canvas_assignment_id: d.canvas_assignment_id,
+    audio_signed_url: signedUrls[i] ?? null,
+  }));
+
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <header>
@@ -78,6 +122,15 @@ export default async function DashboardPage() {
         assignments={assignments}
         rostersByCourseId={rostersByCourseId}
       />
+
+      <section className="rounded-md border border-stone-200 bg-white p-5">
+        <h2 className="ehs-eyebrow mb-3 text-cool-gray">Recent discussions</h2>
+        <DiscussionList
+          discussions={discussions}
+          courseLabelById={courseLabelById}
+          assignmentLabelById={assignmentLabelById}
+        />
+      </section>
 
       <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-stone-200 pt-4 text-xs text-cool-gray">
         <span>
