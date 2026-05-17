@@ -46,9 +46,19 @@ export async function getTeacherGoogleClient(
     .maybeSingle();
   if (error) throw new GoogleAuthError(`teacher lookup: ${error.message}`);
   if (!teacher) throw new GoogleAuthError("Teacher not found.", "not_found");
-  if (!teacher.google_refresh_token) {
+
+  const expiry = teacher.google_token_expires_at
+    ? new Date(teacher.google_token_expires_at).getTime()
+    : 0;
+  const accessValid =
+    !!teacher.google_access_token && Date.now() + REFRESH_BUFFER_MS < expiry;
+
+  // We can proceed if we have either a usable access_token OR a refresh_token.
+  // If we have only an expired access_token and no refresh, the teacher needs
+  // to sign in again (Google won't issue a fresh refresh_token without consent).
+  if (!accessValid && !teacher.google_refresh_token) {
     throw new GoogleAuthError(
-      "Teacher has no Google refresh token. Sign out and sign in again to grant Drive access.",
+      "Google authorization expired. Sign out and sign in again to re-grant Drive access.",
       "missing_refresh_token",
     );
   }
@@ -56,19 +66,14 @@ export async function getTeacherGoogleClient(
   const client = new google.auth.OAuth2(clientId, clientSecret);
   client.setCredentials({
     access_token: teacher.google_access_token ?? undefined,
-    refresh_token: teacher.google_refresh_token,
+    refresh_token: teacher.google_refresh_token ?? undefined,
     expiry_date: teacher.google_token_expires_at
       ? new Date(teacher.google_token_expires_at).getTime()
       : undefined,
   });
 
-  const expiry = teacher.google_token_expires_at
-    ? new Date(teacher.google_token_expires_at).getTime()
-    : 0;
-  const needsRefresh =
-    !teacher.google_access_token || Date.now() + REFRESH_BUFFER_MS >= expiry;
-
-  if (needsRefresh) {
+  // Only refresh if we have a refresh token AND the access token is expiring soon.
+  if (!accessValid && teacher.google_refresh_token) {
     const { credentials } = await client.refreshAccessToken();
     if (!credentials.access_token) {
       throw new GoogleAuthError("Token refresh returned no access_token.");

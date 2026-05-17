@@ -24,7 +24,16 @@ export async function GET(request: NextRequest) {
         "https://www.googleapis.com/auth/documents",
       queryParams: {
         hd: "episcopalhighschool.org",
-        prompt: "select_account",
+        // `prompt: consent` forces the Google consent screen on every
+        // sign-in. Required for a refresh_token to be returned: Google's
+        // documented behavior is to issue a refresh_token only on first
+        // consent. If the same Google account previously consented to the
+        // same scopes via a sibling app on the SAME OAuth client (e.g.
+        // HH), the consent step is silently skipped and no refresh_token
+        // is returned — which breaks server-side Drive calls after the
+        // 1-hour access_token expires. Forcing consent costs one extra
+        // click per sign-in; the alternative is a half-working integration.
+        prompt: "consent",
         access_type: "offline",
       },
     },
