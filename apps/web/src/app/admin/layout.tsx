@@ -21,7 +21,7 @@ export default async function AdminLayout({
         href="/admin/prompts"
         className="text-ink transition-colors hover:text-dark-blue"
       >
-        Transcription prompt
+        Prompts
       </Link>
       <Link
         href="/admin/admins"

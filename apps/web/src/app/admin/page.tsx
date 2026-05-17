@@ -14,8 +14,8 @@ export default function AdminHome() {
       <div className="grid gap-3 sm:grid-cols-2">
         <Tile
           href="/admin/prompts"
-          title="Transcription prompt"
-          description="Edit the system prompt used by Gemini to transcribe every Harkness recording. The prompt body propagates to the next discussion processed."
+          title="Prompts"
+          description="Edit the system prompts the pipeline uses at each stage — transcription, group feedback summary, speaker identification, individual feedback. Changes propagate to the next discussion processed."
         />
         <Tile
           href="/admin/admins"
