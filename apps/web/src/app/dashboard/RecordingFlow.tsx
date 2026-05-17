@@ -8,7 +8,7 @@ import {
   TargetPicker,
   type AssignmentOption,
   type CourseOption,
-  type RosterStudent,
+  type CourseRoster,
   type TargetSelection,
 } from "./TargetPicker";
 
@@ -19,7 +19,7 @@ export function RecordingFlow({
 }: {
   courses: CourseOption[];
   assignments: AssignmentOption[];
-  rostersByCourseId: Record<string, RosterStudent[]>;
+  rostersByCourseId: Record<string, CourseRoster>;
 }) {
   const [audio, setAudio] = useState<RecordedAudio | null>(null);
   const [target, setTarget] = useState<TargetSelection>({

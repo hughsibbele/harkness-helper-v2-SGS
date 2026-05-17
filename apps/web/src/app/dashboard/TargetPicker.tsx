@@ -19,6 +19,17 @@ export type RosterStudent = {
   canvas_user_id: string;
   name: string;
   email: string | null;
+  section_ids: string[];
+};
+
+export type CourseSection = {
+  id: string;
+  name: string;
+};
+
+export type CourseRoster = {
+  students: RosterStudent[];
+  sections: CourseSection[];
 };
 
 export type TargetSelection = {
@@ -35,11 +46,12 @@ export function TargetPicker({
 }: {
   courses: CourseOption[];
   assignments: AssignmentOption[];
-  rostersByCourseId: Record<string, RosterStudent[]>;
+  rostersByCourseId: Record<string, CourseRoster>;
   onChange?: (selection: TargetSelection) => void;
 }) {
   const [courseId, setCourseId] = useState<string | null>(null);
   const [assignmentId, setAssignmentId] = useState<string | null>(null);
+  const [sectionId, setSectionId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [participantIds, setParticipantIds] = useState<Set<string>>(new Set());
 
@@ -47,18 +59,34 @@ export function TargetPicker({
     courses.find((c) => c.canvas_course_id === courseId) ?? null;
   const selectedAssignment =
     assignments.find((a) => a.canvas_assignment_id === assignmentId) ?? null;
-  const roster = courseId ? (rostersByCourseId[courseId] ?? []) : [];
+  const courseRoster = courseId
+    ? (rostersByCourseId[courseId] ?? { students: [], sections: [] })
+    : { students: [], sections: [] };
+  const visibleStudents = sectionId
+    ? courseRoster.students.filter((s) => s.section_ids.includes(sectionId))
+    : courseRoster.students;
 
-  // Default participants to "all in this course" whenever the course changes.
+  // Reset section when course changes. If there's exactly one section, snap to it.
   useEffect(() => {
-    if (courseId) {
-      setParticipantIds(
-        new Set((rostersByCourseId[courseId] ?? []).map((s) => s.canvas_user_id)),
-      );
+    if (courseRoster.sections.length === 1) {
+      setSectionId(courseRoster.sections[0]?.id ?? null);
     } else {
-      setParticipantIds(new Set());
+      setSectionId(null);
     }
-  }, [courseId, rostersByCourseId]);
+  }, [courseId, courseRoster.sections]);
+
+  // Default participants to "all currently visible" whenever course or
+  // section selection changes.
+  useEffect(() => {
+    if (!courseId) {
+      setParticipantIds(new Set());
+      return;
+    }
+    const pool = sectionId
+      ? courseRoster.students.filter((s) => s.section_ids.includes(sectionId))
+      : courseRoster.students;
+    setParticipantIds(new Set(pool.map((s) => s.canvas_user_id)));
+  }, [courseId, sectionId, courseRoster.students]);
 
   // Notify parent on any change. The effect makes this a single source of truth.
   useEffect(() => {
@@ -101,7 +129,7 @@ export function TargetPicker({
   }
 
   function selectAllParticipants() {
-    setParticipantIds(new Set(roster.map((s) => s.canvas_user_id)));
+    setParticipantIds(new Set(visibleStudents.map((s) => s.canvas_user_id)));
   }
 
   function deselectAllParticipants() {
@@ -173,11 +201,33 @@ export function TargetPicker({
         </ul>
       </div>
 
+      {courseId && courseRoster.sections.length > 1 && (
+        <div>
+          <div className="mb-2 text-xs uppercase tracking-wide text-cool-gray">
+            Section
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Chip selected={sectionId === null} onClick={() => setSectionId(null)}>
+              All sections
+            </Chip>
+            {courseRoster.sections.map((s) => (
+              <Chip
+                key={s.id}
+                selected={s.id === sectionId}
+                onClick={() => setSectionId(s.id)}
+              >
+                {s.name}
+              </Chip>
+            ))}
+          </div>
+        </div>
+      )}
+
       {courseId && (
         <div>
           <div className="mb-2 flex items-center justify-between gap-2">
             <span className="text-xs uppercase tracking-wide text-cool-gray">
-              Participants ({participantIds.size}/{roster.length})
+              Participants ({participantIds.size}/{visibleStudents.length})
             </span>
             <div className="flex gap-2 text-xs">
               <button
@@ -198,13 +248,14 @@ export function TargetPicker({
             </div>
           </div>
           <ul className="max-h-56 overflow-y-auto rounded-md border border-stone-200 bg-white">
-            {roster.length === 0 && (
+            {visibleStudents.length === 0 && (
               <li className="px-3 py-2 text-sm text-cool-gray">
-                No roster cached for this course. Refresh Canvas if you just
-                added students.
+                {courseRoster.students.length === 0
+                  ? "No roster cached for this course. Refresh Canvas if you just added students."
+                  : "No students in this section."}
               </li>
             )}
-            {roster.map((s) => {
+            {visibleStudents.map((s) => {
               const checked = participantIds.has(s.canvas_user_id);
               return (
                 <li key={s.canvas_user_id}>

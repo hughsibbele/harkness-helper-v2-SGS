@@ -5,6 +5,7 @@ import {
   CanvasError,
   listActiveTeachingCourses,
   listCourseAssignments,
+  listCourseSections,
   listCourseStudentEnrollments,
   normalizeHost,
   type CanvasConfig,
@@ -75,12 +76,13 @@ export async function syncCanvasCache(): Promise<CanvasSyncResult> {
     let studentCount = 0;
 
     // Sequential per-course to stay under Canvas's concurrency budget. Per
-    // course we still parallelize the two reads (assignments + enrollments)
-    // — that's only 2 calls, safe.
+    // course we still parallelize the three reads (assignments + enrollments
+    // + sections) — small fan-out, safe.
     for (const c of courses) {
-      const [assignments, enrollments] = await Promise.all([
+      const [assignments, enrollments, sections] = await Promise.all([
         listCourseAssignments(config, c.id),
         listCourseStudentEnrollments(config, c.id),
+        listCourseSections(config, c.id),
       ]);
 
       if (assignments.length > 0) {
@@ -108,23 +110,49 @@ export async function syncCanvasCache(): Promise<CanvasSyncResult> {
         assignmentCount += assignments.length;
       }
 
-      // Roster: dedupe by user.id (a student in two sections appears twice).
-      const seen = new Set<number>();
-      const students: { canvas_user_id: string; name: string; email: string | null }[] = [];
+      // Roster: dedupe students by user.id but accumulate section_ids
+      // across all enrollment rows (a student in two sections of the same
+      // course gets a single students entry with two section_ids).
+      const studentsById = new Map<
+        string,
+        {
+          canvas_user_id: string;
+          name: string;
+          email: string | null;
+          section_ids: string[];
+        }
+      >();
       for (const e of enrollments) {
-        if (!e.user || seen.has(e.user.id)) continue;
-        seen.add(e.user.id);
-        students.push({
-          canvas_user_id: String(e.user.id),
+        if (!e.user) continue;
+        const cuid = String(e.user.id);
+        const sectionId = String(e.course_section_id);
+        const existing = studentsById.get(cuid);
+        if (existing) {
+          if (!existing.section_ids.includes(sectionId)) {
+            existing.section_ids.push(sectionId);
+          }
+          continue;
+        }
+        studentsById.set(cuid, {
+          canvas_user_id: cuid,
           name: e.user.name,
           email: e.user.email ?? e.user.login_id ?? null,
+          section_ids: [sectionId],
         });
       }
+      const students = Array.from(studentsById.values());
+
+      const sectionsJson = sections.map((s) => ({
+        id: String(s.id),
+        name: s.name,
+      }));
+
       const { error: rosterError } = await admin.from("course_rosters").upsert(
         {
           teacher_id: teacher.id,
           canvas_course_id: String(c.id),
           students,
+          sections: sectionsJson,
           last_synced_at: syncedAt,
         },
         { onConflict: "teacher_id,canvas_course_id" },

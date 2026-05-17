@@ -313,12 +313,14 @@ export type Database = {
           teacher_id: string;
           canvas_course_id: string;
           students: Json;
+          sections: Json;
           last_synced_at: string;
         };
         Insert: {
           teacher_id: string;
           canvas_course_id: string;
           students?: Json;
+          sections?: Json;
           last_synced_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["course_rosters"]["Insert"]>;

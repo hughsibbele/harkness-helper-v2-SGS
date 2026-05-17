@@ -60,6 +60,7 @@ export type CanvasEnrollment = {
   id: number;
   user_id: number;
   course_id: number;
+  course_section_id: number;
   enrollment_state: string;
   type: string;
   user?: CanvasEnrollmentUser;
@@ -236,6 +237,7 @@ export async function listCourseAssignments(
 /**
  * Active student enrollments for a course, with embedded user records.
  * One row per (user, section); a user enrolled in two sections appears twice.
+ * Each row carries `course_section_id` so we can group students by section.
  * Caller deduplicates by user.id when shaping the roster jsonb.
  */
 export async function listCourseStudentEnrollments(
@@ -246,4 +248,23 @@ export async function listCourseStudentEnrollments(
     `/courses/${canvasCourseId}/enrollments?` +
     "type[]=StudentEnrollment&state[]=active&include[]=user&per_page=100";
   return paginate<CanvasEnrollment>(config, path);
+}
+
+export type CanvasSection = {
+  id: number;
+  name: string;
+  course_id: number;
+  sis_section_id?: string | null;
+};
+
+/**
+ * All sections of a course. Used to give the section ids returned by
+ * enrollments a human-readable name for the section picker.
+ */
+export async function listCourseSections(
+  config: CanvasConfig,
+  canvasCourseId: string | number,
+): Promise<CanvasSection[]> {
+  const path = `/courses/${canvasCourseId}/sections?per_page=100`;
+  return paginate<CanvasSection>(config, path);
 }

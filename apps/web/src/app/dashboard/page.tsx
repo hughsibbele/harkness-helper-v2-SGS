@@ -5,6 +5,8 @@ import { RecordingFlow } from "./RecordingFlow";
 import type {
   AssignmentOption,
   CourseOption,
+  CourseRoster,
+  CourseSection,
   RosterStudent,
 } from "./TargetPicker";
 
@@ -34,7 +36,7 @@ export default async function DashboardPage() {
       .eq("workflow_state", "published"),
     supabase
       .from("course_rosters")
-      .select("canvas_course_id,students")
+      .select("canvas_course_id,students,sections")
       .eq("teacher_id", teacher.id),
   ]);
 
@@ -49,14 +51,18 @@ export default async function DashboardPage() {
     name: a.name,
     due_at: a.due_at,
   }));
-  const rostersByCourseId: Record<string, RosterStudent[]> = {};
+  const rostersByCourseId: Record<string, CourseRoster> = {};
   for (const row of rostersRes.data ?? []) {
     const students = Array.isArray(row.students)
       ? (row.students as RosterStudent[])
       : [];
-    rostersByCourseId[row.canvas_course_id] = students.sort((a, b) =>
-      a.name.localeCompare(b.name),
-    );
+    const sections = Array.isArray(row.sections)
+      ? (row.sections as CourseSection[])
+      : [];
+    rostersByCourseId[row.canvas_course_id] = {
+      students: students.sort((a, b) => a.name.localeCompare(b.name)),
+      sections: sections.sort((a, b) => a.name.localeCompare(b.name)),
+    };
   }
 
   return (
