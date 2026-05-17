@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@harkness-helper/anonymizer": "workspace:*",
+    "@harkness-helper/canvas": "workspace:*",
     "@harkness-helper/db": "workspace:*",
     "@harkness-helper/prompts": "workspace:*",
     "@supabase/ssr": "^0.10.2",
