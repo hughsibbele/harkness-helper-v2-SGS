@@ -25,6 +25,7 @@ export function RecordingFlow({
   const [target, setTarget] = useState<TargetSelection>({
     course: null,
     assignment: null,
+    section: null,
     participantIds: [],
   });
   const [resetCounter, setResetCounter] = useState(0);
@@ -52,6 +53,9 @@ export function RecordingFlow({
     fd.append("audio", file);
     fd.append("canvas_course_id", target.course.canvas_course_id);
     fd.append("canvas_assignment_id", target.assignment.canvas_assignment_id);
+    if (target.section) {
+      fd.append("canvas_section_id", target.section.id);
+    }
     for (const id of target.participantIds) {
       fd.append("participant_id", id);
     }

@@ -1,3 +1,5 @@
+import { DeleteDiscussionButton } from "./DeleteDiscussionButton";
+
 export type DiscussionState =
   | "uploaded"
   | "transcribing"
@@ -12,6 +14,7 @@ export type DiscussionListRow = {
   error_message: string | null;
   canvas_course_id: string;
   canvas_assignment_id: string;
+  canvas_section_id: string | null;
   audio_signed_url: string | null;
 };
 
@@ -30,10 +33,12 @@ export function DiscussionList({
   discussions,
   courseLabelById,
   assignmentLabelById,
+  sectionLabelById,
 }: {
   discussions: DiscussionListRow[];
   courseLabelById: Record<string, string>;
   assignmentLabelById: Record<string, string>;
+  sectionLabelById: Record<string, string>;
 }) {
   if (discussions.length === 0) {
     return (
@@ -51,15 +56,27 @@ export function DiscussionList({
           courseLabelById[d.canvas_course_id] ?? d.canvas_course_id;
         const assignmentLabel =
           assignmentLabelById[d.canvas_assignment_id] ?? d.canvas_assignment_id;
+        const sectionLabel = d.canvas_section_id
+          ? (sectionLabelById[d.canvas_section_id] ?? null)
+          : null;
         return (
           <li key={d.id} className="py-3">
-            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
-              <span className="font-medium text-ink">{assignmentLabel}</span>
-              <span className="text-xs text-cool-gray">{courseLabel}</span>
-              <span className="text-xs text-cool-gray">·</span>
-              <span className="text-xs text-cool-gray">
-                {formatDate(d.recorded_at)}
-              </span>
+            <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-sm">
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                <span className="font-medium text-ink">{assignmentLabel}</span>
+                <span className="text-xs text-cool-gray">{courseLabel}</span>
+                {sectionLabel && (
+                  <>
+                    <span className="text-xs text-cool-gray">·</span>
+                    <span className="text-xs text-cool-gray">{sectionLabel}</span>
+                  </>
+                )}
+                <span className="text-xs text-cool-gray">·</span>
+                <span className="text-xs text-cool-gray">
+                  {formatDate(d.recorded_at)}
+                </span>
+              </div>
+              <DeleteDiscussionButton discussionId={d.id} />
             </div>
             <div className="mt-1 flex items-center gap-2 text-xs">
               <span

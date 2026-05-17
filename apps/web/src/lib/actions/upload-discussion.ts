@@ -28,6 +28,10 @@ export async function uploadDiscussion(
   const canvasAssignmentId = String(
     formData.get("canvas_assignment_id") ?? "",
   ).trim();
+  const canvasSectionIdRaw = String(
+    formData.get("canvas_section_id") ?? "",
+  ).trim();
+  const canvasSectionId = canvasSectionIdRaw.length > 0 ? canvasSectionIdRaw : null;
   const participantIds = formData
     .getAll("participant_id")
     .map((v) => String(v))
@@ -44,16 +48,23 @@ export async function uploadDiscussion(
   const admin = createAdminDbClient();
 
   // Refuse a duplicate up front instead of orphaning a storage upload.
-  const { data: existing } = await admin
+  // Composite key: per (assignment, section). NULL section is treated as
+  // distinct from any specific section but only one NULL row per assignment
+  // (NULLS NOT DISTINCT on the constraint).
+  let duplicateQuery = admin
     .from("discussions")
     .select("id")
-    .eq("canvas_assignment_id", canvasAssignmentId)
-    .maybeSingle();
+    .eq("canvas_assignment_id", canvasAssignmentId);
+  duplicateQuery = canvasSectionId
+    ? duplicateQuery.eq("canvas_section_id", canvasSectionId)
+    : duplicateQuery.is("canvas_section_id", null);
+  const { data: existing } = await duplicateQuery.maybeSingle();
   if (existing) {
     return {
       ok: false,
-      message:
-        "A recording is already linked to this assignment. Delete the existing discussion first to re-upload.",
+      message: canvasSectionId
+        ? "A recording is already linked to this assignment + section. Delete the existing discussion first to re-upload."
+        : "A recording without a section is already linked to this assignment. Delete it first to re-upload.",
     };
   }
 
@@ -77,7 +88,8 @@ export async function uploadDiscussion(
   // recording per assignment). Upload first so we have a stable audio_url
   // before inserting the discussion row.
   const ext = extensionForMime(audio.type);
-  const storagePath = `${teacher.id}/${canvasAssignmentId}/recording.${ext}`;
+  const sectionSlug = canvasSectionId ?? "no-section";
+  const storagePath = `${teacher.id}/${canvasAssignmentId}/${sectionSlug}/recording.${ext}`;
   const { error: uploadErr } = await admin.storage
     .from(BUCKET)
     .upload(storagePath, audio, {
@@ -97,6 +109,7 @@ export async function uploadDiscussion(
       teacher_id: teacher.id,
       canvas_assignment_id: canvasAssignmentId,
       canvas_course_id: canvasCourseId,
+      canvas_section_id: canvasSectionId,
       recorded_at: today,
       audio_url: storagePath,
       state: "uploaded",

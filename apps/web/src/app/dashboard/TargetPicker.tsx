@@ -35,6 +35,7 @@ export type CourseRoster = {
 export type TargetSelection = {
   course: CourseOption | null;
   assignment: AssignmentOption | null;
+  section: CourseSection | null;
   participantIds: string[];
 };
 
@@ -95,14 +96,18 @@ export function TargetPicker({
     setParticipantIds(new Set(pool.map((s) => s.canvas_user_id)));
   }, [courseId, sectionId, rostersByCourseId]);
 
+  const selectedSection =
+    courseRoster.sections.find((s) => s.id === sectionId) ?? null;
+
   // Notify parent on any change. The effect makes this a single source of truth.
   useEffect(() => {
     onChange?.({
       course: selectedCourse,
       assignment: selectedAssignment,
+      section: selectedSection,
       participantIds: Array.from(participantIds),
     });
-  }, [selectedCourse, selectedAssignment, participantIds, onChange]);
+  }, [selectedCourse, selectedAssignment, selectedSection, participantIds, onChange]);
 
   const visibleAssignments = useMemo(
     () => sortAndFilterAssignments(assignments, courseId, query),

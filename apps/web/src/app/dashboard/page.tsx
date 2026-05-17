@@ -48,7 +48,7 @@ export default async function DashboardPage() {
       supabase
         .from("discussions")
         .select(
-          "id,recorded_at,state,error_message,canvas_course_id,canvas_assignment_id,audio_url",
+          "id,recorded_at,state,error_message,canvas_course_id,canvas_assignment_id,canvas_section_id,audio_url",
         )
         .eq("teacher_id", teacher.id)
         .order("created_at", { ascending: false })
@@ -88,6 +88,12 @@ export default async function DashboardPage() {
   for (const a of assignments) {
     assignmentLabelById[a.canvas_assignment_id] = a.name;
   }
+  const sectionLabelById: Record<string, string> = {};
+  for (const r of Object.values(rostersByCourseId)) {
+    for (const s of r.sections) {
+      sectionLabelById[s.id] = s.name;
+    }
+  }
 
   // Generate signed URLs for recent discussions' audio (private bucket).
   const rawDiscussions = discussionsRes.data ?? [];
@@ -106,6 +112,7 @@ export default async function DashboardPage() {
     error_message: d.error_message,
     canvas_course_id: d.canvas_course_id,
     canvas_assignment_id: d.canvas_assignment_id,
+    canvas_section_id: d.canvas_section_id,
     audio_signed_url: signedUrls[i] ?? null,
   }));
 
@@ -129,6 +136,7 @@ export default async function DashboardPage() {
           discussions={discussions}
           courseLabelById={courseLabelById}
           assignmentLabelById={assignmentLabelById}
+          sectionLabelById={sectionLabelById}
         />
       </section>
 

@@ -169,6 +169,7 @@ export type Database = {
           teacher_id: string;
           canvas_assignment_id: string;
           canvas_course_id: string;
+          canvas_section_id: string | null;
           recorded_at: string;
           audio_url: string;
           transcript: string | null;
@@ -185,6 +186,7 @@ export type Database = {
           teacher_id: string;
           canvas_assignment_id: string;
           canvas_course_id: string;
+          canvas_section_id?: string | null;
           recorded_at: string;
           audio_url: string;
           transcript?: string | null;
@@ -201,6 +203,7 @@ export type Database = {
           teacher_id?: string;
           canvas_assignment_id?: string;
           canvas_course_id?: string;
+          canvas_section_id?: string | null;
           recorded_at?: string;
           audio_url?: string;
           transcript?: string | null;
