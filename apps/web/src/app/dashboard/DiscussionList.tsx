@@ -1,7 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import { DeleteDiscussionButton } from "./DeleteDiscussionButton";
+
+const POLL_INTERVAL_MS = 5000;
 
 export type DiscussionState =
   | "uploaded"
@@ -43,8 +46,26 @@ export function DiscussionList({
   assignmentLabelById: Record<string, string>;
   sectionLabelById: Record<string, string>;
 }) {
+  const router = useRouter();
   const [courseFilter, setCourseFilter] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+
+  // Auto-refresh whenever any discussion is in a non-terminal state. Stops
+  // as soon as everything is transcribed/posted/failed (terminal). Uses
+  // router.refresh() so the server re-runs page data fetches in place
+  // without a hard reload (preserves filter/search state and scroll).
+  const hasPending = useMemo(
+    () =>
+      discussions.some(
+        (d) => d.state === "uploaded" || d.state === "transcribing",
+      ),
+    [discussions],
+  );
+  useEffect(() => {
+    if (!hasPending) return;
+    const id = setInterval(() => router.refresh(), POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [hasPending, router]);
 
   // Distinct courses among this year's discussions, ordered by label.
   const courseChips = useMemo(() => {
@@ -109,8 +130,16 @@ export function DiscussionList({
         className="w-full rounded-md border border-stone-300 bg-white px-3 py-1.5 text-sm text-ink focus:border-stone-500 focus:outline-none"
       />
 
-      <div className="text-xs text-cool-gray">
-        Showing {filtered.length} of {discussions.length} this academic year
+      <div className="flex items-center gap-2 text-xs text-cool-gray">
+        <span>
+          Showing {filtered.length} of {discussions.length} this academic year
+        </span>
+        {hasPending && (
+          <span className="flex items-center gap-1 text-blue-700">
+            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
+            updating live
+          </span>
+        )}
       </div>
 
       {filtered.length === 0 ? (
