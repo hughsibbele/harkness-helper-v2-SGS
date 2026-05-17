@@ -5,6 +5,7 @@
 // re-runs only the failed step on retry. onFailure handler marks the
 // discussion row as failed after retries are exhausted.
 
+import { GoogleGenAI } from "@google/genai";
 import { scrubText, type AnonymizableStudent } from "@harkness-helper/anonymizer";
 import { createAdminDbClient } from "@harkness-helper/db/admin";
 import { getActiveTranscriptionPrompt } from "@harkness-helper/prompts";
@@ -14,103 +15,6 @@ const BUCKET = "discussion-audio";
 const SIGNED_URL_TTL_SECONDS = 60 * 30; // 30 min: enough to fetch + upload to Gemini
 const FILES_API_POLL_INTERVAL_MS = 2000;
 const FILES_API_POLL_TIMEOUT_MS = 5 * 60 * 1000;
-const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
-const GEMINI_MODEL = "gemini-2.5-flash";
-
-// Raw fetch against the Gemini REST API. The @google/genai 2.3.0 SDK has a
-// bug where files.upload doesn't propagate the constructor's apiKey to the
-// actual HTTP request — returns "API Key not found" even with a valid key
-// (verified via direct curl). Going around the SDK keeps us moving and
-// matches the curl shape we know works.
-
-type GeminiFile = {
-  name: string;
-  uri: string;
-  mimeType: string;
-  state?: string;
-};
-
-async function uploadAudioToGemini(
-  apiKey: string,
-  audio: Blob,
-  mimeType: string,
-): Promise<GeminiFile> {
-  const url = `${GEMINI_BASE_URL}/upload/v1beta/files?key=${encodeURIComponent(apiKey)}&uploadType=media`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": mimeType },
-    body: audio,
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Gemini files upload (${res.status}): ${body.slice(0, 300)}`);
-  }
-  const json = (await res.json()) as { file: GeminiFile };
-  if (!json.file?.name || !json.file?.uri) {
-    throw new Error("Gemini files upload returned no name/uri");
-  }
-  return json.file;
-}
-
-async function pollGeminiFileUntilActive(
-  apiKey: string,
-  name: string,
-): Promise<GeminiFile> {
-  const deadline = Date.now() + FILES_API_POLL_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const res = await fetch(
-      `${GEMINI_BASE_URL}/v1beta/${name}?key=${encodeURIComponent(apiKey)}`,
-    );
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`Gemini file poll (${res.status}): ${body.slice(0, 300)}`);
-    }
-    const file = (await res.json()) as GeminiFile;
-    if (file.state === "ACTIVE") return file;
-    if (file.state === "FAILED") {
-      throw new Error("Gemini Files API processing failed");
-    }
-    await new Promise((r) => setTimeout(r, FILES_API_POLL_INTERVAL_MS));
-  }
-  throw new Error("Gemini Files API timed out waiting for ACTIVE state");
-}
-
-async function geminiGenerateContent(
-  apiKey: string,
-  fileUri: string,
-  mimeType: string,
-  prompt: string,
-): Promise<string> {
-  const url = `${GEMINI_BASE_URL}/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { fileData: { fileUri, mimeType } },
-            { text: prompt },
-          ],
-        },
-      ],
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Gemini generateContent (${res.status}): ${body.slice(0, 300)}`);
-  }
-  const json = (await res.json()) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  };
-  const text = json.candidates?.[0]?.content?.parts
-    ?.map((p) => p.text ?? "")
-    .join("")
-    .trim();
-  if (!text) throw new Error("Gemini returned an empty transcript");
-  return text;
-}
 
 type RosterStudent = {
   canvas_user_id: string;
@@ -218,6 +122,20 @@ export const transcribeDiscussion = inngest.createFunction(
 
     const transcript = await step.run("gemini-transcribe", async () => {
       const apiKey = process.env.GEMINI_API_KEY;
+      // Temporary diagnostic: surface whether the env var is reaching the
+      // function context, without leaking the value. Remove once root cause
+      // is found.
+      logger.info("GEMINI_API_KEY diagnostic", {
+        present: !!apiKey,
+        length: apiKey?.length ?? 0,
+        starts: apiKey?.slice(0, 6) ?? "",
+        endsClean:
+          apiKey != null &&
+          apiKey.length > 0 &&
+          !apiKey.endsWith("\n") &&
+          !apiKey.endsWith(" ") &&
+          !apiKey.endsWith('"'),
+      });
       if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
 
       const { data: signed, error: signErr } = await admin.storage
@@ -232,18 +150,52 @@ export const transcribeDiscussion = inngest.createFunction(
         throw new Error(`audio download: ${audioRes.status} ${audioRes.statusText}`);
       }
       const audioBlob = await audioRes.blob();
-      const mimeType = audioBlob.type || "audio/mp4";
 
-      // mimeType must be in Gemini's accepted set
-      // (wav/mp3/aiff/aac/ogg/flac/m4a). webm/opus from Chrome will fail here.
-      const uploaded = await uploadAudioToGemini(apiKey, audioBlob, mimeType);
-      const active = await pollGeminiFileUntilActive(apiKey, uploaded.name);
-      return geminiGenerateContent(
-        apiKey,
-        active.uri,
-        active.mimeType ?? mimeType,
-        ctx.promptBody,
-      );
+      const ai = new GoogleGenAI({ apiKey });
+
+      // Upload via Files API. mimeType must be in Gemini's accepted set
+      // (wav/mp3/aiff/aac/ogg/flac). webm/opus from Chrome will fail here.
+      const uploaded = await ai.files.upload({
+        file: audioBlob,
+        config: { mimeType: audioBlob.type || "audio/mp4" },
+      });
+      if (!uploaded.name) throw new Error("Gemini Files API returned no name");
+
+      // Poll until ACTIVE — large files take a few seconds to process.
+      let file = uploaded;
+      const deadline = Date.now() + FILES_API_POLL_TIMEOUT_MS;
+      while (file.state !== "ACTIVE") {
+        if (file.state === "FAILED") {
+          throw new Error("Gemini Files API processing failed");
+        }
+        if (Date.now() > deadline) {
+          throw new Error("Gemini Files API timed out waiting for ACTIVE state");
+        }
+        await new Promise((r) => setTimeout(r, FILES_API_POLL_INTERVAL_MS));
+        file = await ai.files.get({ name: uploaded.name });
+      }
+
+      const result = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                fileData: {
+                  fileUri: file.uri ?? "",
+                  mimeType: file.mimeType ?? audioBlob.type,
+                },
+              },
+              { text: ctx.promptBody },
+            ],
+          },
+        ],
+      });
+
+      const text = result.text ?? "";
+      if (!text.trim()) throw new Error("Gemini returned an empty transcript");
+      return text;
     });
 
     const scrubbed = await step.run("scrub-names", async () => {
