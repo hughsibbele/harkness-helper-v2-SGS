@@ -91,6 +91,9 @@ export function normalizeHost(input: string): string {
   return h;
 }
 
+const MAX_429_RETRIES = 3;
+const DEFAULT_RETRY_AFTER_SECONDS = 5;
+
 async function canvasFetch(
   config: CanvasConfig,
   pathOrUrl: string,
@@ -99,14 +102,26 @@ async function canvasFetch(
   const url = pathOrUrl.startsWith("https://")
     ? pathOrUrl
     : `https://${config.host}/api/v1${pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`}`;
-  return fetch(url, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${config.token}`,
-      Accept: "application/json",
-      ...(init.headers as Record<string, string> | undefined),
-    },
-  });
+  const headers = {
+    Authorization: `Bearer ${config.token}`,
+    Accept: "application/json",
+    ...(init.headers as Record<string, string> | undefined),
+  };
+
+  let lastRes: Response | null = null;
+  for (let attempt = 0; attempt <= MAX_429_RETRIES; attempt++) {
+    const res = await fetch(url, { ...init, headers });
+    if (res.status !== 429) return res;
+    lastRes = res;
+    const retryAfter = Number(res.headers.get("Retry-After"));
+    const seconds = Number.isFinite(retryAfter) && retryAfter > 0
+      ? retryAfter
+      : DEFAULT_RETRY_AFTER_SECONDS;
+    // Drain body so the connection can be reused
+    await res.text().catch(() => "");
+    await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+  }
+  return lastRes!;
 }
 
 // Canvas paginates via Link header: `<https://...?page=2>; rel="next", <...>; rel="last"`.
@@ -167,18 +182,43 @@ export async function getSelf(config: CanvasConfig): Promise<CanvasUser> {
 }
 
 /**
- * Fetch all courses the authenticated user teaches, with term context.
- * Includes available + completed + unpublished so we can show full history;
- * the caller filters by workflow_state for the UI.
+ * True if `now` falls within the term's start/end window. A course with no
+ * term, no start_at, or no end_at is treated as active (can't filter without
+ * data). Listing terms via /accounts/:id/terms would be more authoritative
+ * but requires account-admin scope, which most teachers don't have.
  */
-export async function listTeachingCourses(
+export function isTermActive(
+  term: CanvasTerm | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (!term) return true;
+  if (term.start_at) {
+    const start = new Date(term.start_at);
+    if (!isNaN(start.getTime()) && now < start) return false;
+  }
+  if (term.end_at) {
+    const end = new Date(term.end_at);
+    if (!isNaN(end.getTime()) && now > end) return false;
+  }
+  return true;
+}
+
+/**
+ * Fetch the authenticated user's currently-active courses: `available`
+ * workflow_state AND term currently in progress. Excludes past-term
+ * courses that Canvas hasn't auto-concluded, plus future-term draft
+ * courses. Harkness is about today's classes; historical sync would
+ * balloon API usage and trip Canvas's rate limiter.
+ */
+export async function listActiveTeachingCourses(
   config: CanvasConfig,
 ): Promise<CanvasCourse[]> {
   const path =
     "/courses?enrollment_type=teacher&per_page=100" +
     "&include[]=term" +
-    "&state[]=available&state[]=completed&state[]=unpublished";
-  return paginate<CanvasCourse>(config, path);
+    "&state[]=available";
+  const all = await paginate<CanvasCourse>(config, path);
+  return all.filter((c) => isTermActive(c.term));
 }
 
 /**

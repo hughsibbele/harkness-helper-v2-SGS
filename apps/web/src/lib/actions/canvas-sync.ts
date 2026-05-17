@@ -3,9 +3,9 @@
 import { revalidatePath } from "next/cache";
 import {
   CanvasError,
+  listActiveTeachingCourses,
   listCourseAssignments,
   listCourseStudentEnrollments,
-  listTeachingCourses,
   normalizeHost,
   type CanvasConfig,
 } from "@harkness-helper/canvas";
@@ -46,7 +46,7 @@ export async function syncCanvasCache(): Promise<CanvasSyncResult> {
   const syncedAt = new Date().toISOString();
 
   try {
-    const courses = await listTeachingCourses(config);
+    const courses = await listActiveTeachingCourses(config);
 
     // Upsert courses
     if (courses.length > 0) {
@@ -71,26 +71,23 @@ export async function syncCanvasCache(): Promise<CanvasSyncResult> {
       }
     }
 
-    // Fan out per-course fetches
-    const perCourse = await Promise.all(
-      courses.map(async (c) => {
-        const [assignments, enrollments] = await Promise.all([
-          listCourseAssignments(config, c.id),
-          listCourseStudentEnrollments(config, c.id),
-        ]);
-        return { courseId: c.id, assignments, enrollments };
-      }),
-    );
-
     let assignmentCount = 0;
     let studentCount = 0;
 
-    for (const { courseId, assignments, enrollments } of perCourse) {
+    // Sequential per-course to stay under Canvas's concurrency budget. Per
+    // course we still parallelize the two reads (assignments + enrollments)
+    // — that's only 2 calls, safe.
+    for (const c of courses) {
+      const [assignments, enrollments] = await Promise.all([
+        listCourseAssignments(config, c.id),
+        listCourseStudentEnrollments(config, c.id),
+      ]);
+
       if (assignments.length > 0) {
         const { error } = await admin.from("canvas_assignment_cache").upsert(
           assignments.map((a) => ({
             teacher_id: teacher.id,
-            canvas_course_id: String(courseId),
+            canvas_course_id: String(c.id),
             canvas_assignment_id: String(a.id),
             name: a.name,
             description: a.description ?? null,
@@ -105,7 +102,7 @@ export async function syncCanvasCache(): Promise<CanvasSyncResult> {
         if (error) {
           return {
             ok: false,
-            message: `assignment cache write (course ${courseId}): ${error.message}`,
+            message: `assignment cache write (course ${c.id}): ${error.message}`,
           };
         }
         assignmentCount += assignments.length;
@@ -126,7 +123,7 @@ export async function syncCanvasCache(): Promise<CanvasSyncResult> {
       const { error: rosterError } = await admin.from("course_rosters").upsert(
         {
           teacher_id: teacher.id,
-          canvas_course_id: String(courseId),
+          canvas_course_id: String(c.id),
           students,
           last_synced_at: syncedAt,
         },
@@ -135,7 +132,7 @@ export async function syncCanvasCache(): Promise<CanvasSyncResult> {
       if (rosterError) {
         return {
           ok: false,
-          message: `roster write (course ${courseId}): ${rosterError.message}`,
+          message: `roster write (course ${c.id}): ${rosterError.message}`,
         };
       }
       studentCount += students.length;
