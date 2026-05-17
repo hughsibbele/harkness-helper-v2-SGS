@@ -67,26 +67,33 @@ export function TargetPicker({
     : courseRoster.students;
 
   // Reset section when course changes. If there's exactly one section, snap to it.
+  // Depend only on the stable parent prop + courseId — courseRoster is
+  // re-derived per render so its array refs change every render and would
+  // cause an infinite loop here.
   useEffect(() => {
-    if (courseRoster.sections.length === 1) {
-      setSectionId(courseRoster.sections[0]?.id ?? null);
+    const sections = courseId
+      ? (rostersByCourseId[courseId]?.sections ?? [])
+      : [];
+    if (sections.length === 1) {
+      setSectionId(sections[0]?.id ?? null);
     } else {
       setSectionId(null);
     }
-  }, [courseId, courseRoster.sections]);
+  }, [courseId, rostersByCourseId]);
 
   // Default participants to "all currently visible" whenever course or
-  // section selection changes.
+  // section selection changes. Same reasoning re: deps as above.
   useEffect(() => {
     if (!courseId) {
       setParticipantIds(new Set());
       return;
     }
+    const students = rostersByCourseId[courseId]?.students ?? [];
     const pool = sectionId
-      ? courseRoster.students.filter((s) => s.section_ids.includes(sectionId))
-      : courseRoster.students;
+      ? students.filter((s) => s.section_ids.includes(sectionId))
+      : students;
     setParticipantIds(new Set(pool.map((s) => s.canvas_user_id)));
-  }, [courseId, sectionId, courseRoster.students]);
+  }, [courseId, sectionId, rostersByCourseId]);
 
   // Notify parent on any change. The effect makes this a single source of truth.
   useEffect(() => {
