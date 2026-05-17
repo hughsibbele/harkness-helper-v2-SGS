@@ -31,6 +31,20 @@ type RosterStudent = {
   email: string | null;
 };
 
+// Match v1's getPrompt(): replace every `{key}` occurrence with the value
+// (or empty string if the value is null/undefined). v1 used JS regex with
+// global flag; we do the same. Keys are alphanumeric/underscore.
+function fillTemplate(
+  body: string,
+  vars: Record<string, string | null | undefined>,
+): string {
+  let out = body;
+  for (const [key, value] of Object.entries(vars)) {
+    out = out.replace(new RegExp(`\\{${key}\\}`, "g"), value ?? "");
+  }
+  return out;
+}
+
 export const transcribeDiscussion = inngest.createFunction(
   {
     id: "transcribe-discussion",
@@ -211,29 +225,23 @@ export const transcribeDiscussion = inngest.createFunction(
       if (error) throw new Error(`save transcript: ${error.message}`);
     });
 
-    // Pass 2: narrative summary from the verbatim transcript. Text-only call,
-    // no audio file required — the summary prompt body asks "given a transcript,
-    // produce a summary" and we paste the transcript as input.
+    // Pass 2: summary (v1's GROUP_FEEDBACK prompt). Text-only Gemini call.
+    // The prompt body contains {grade} and {transcript} placeholders that v1
+    // substitutes server-side; we do the same. {grade} defaults to v1's
+    // "not yet assigned" since grading happens later (in super-grader).
     const rawSummary = await step.run("gemini-summarize", async () => {
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
 
+      const filled = fillTemplate(ctx.summaryPromptBody, {
+        grade: "not yet assigned",
+        transcript: scrubbedTranscript,
+      });
+
       const ai = new GoogleGenAI({ apiKey });
       const result = await ai.models.generateContent({
         model: GEMINI_MODEL,
-        contents: [
-          {
-            role: "user",
-            parts: [
-              {
-                text:
-                  ctx.summaryPromptBody +
-                  "\n\n---\n\n## Verbatim transcript\n\n" +
-                  scrubbedTranscript,
-              },
-            ],
-          },
-        ],
+        contents: [{ role: "user", parts: [{ text: filled }] }],
       });
       const text = result.text ?? "";
       if (!text.trim()) throw new Error("Gemini returned an empty summary");

@@ -89,7 +89,7 @@ export type Database = {
           id: string;
           teacher_id: string | null;
           scope: "system" | "teacher";
-          purpose: "transcription" | "summary";
+          purpose: "transcription" | "summary" | "speaker_identification" | "individual_feedback";
           label: string;
           body: string;
           is_default: boolean;
@@ -100,7 +100,7 @@ export type Database = {
           id?: string;
           teacher_id?: string | null;
           scope: "system" | "teacher";
-          purpose: "transcription" | "summary";
+          purpose: "transcription" | "summary" | "speaker_identification" | "individual_feedback";
           label: string;
           body: string;
           is_default?: boolean;
@@ -111,7 +111,7 @@ export type Database = {
           id?: string;
           teacher_id?: string | null;
           scope?: "system" | "teacher";
-          purpose?: "transcription" | "summary";
+          purpose?: "transcription" | "summary" | "speaker_identification" | "individual_feedback";
           label?: string;
           body?: string;
           is_default?: boolean;

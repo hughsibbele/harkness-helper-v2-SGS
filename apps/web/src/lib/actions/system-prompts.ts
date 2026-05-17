@@ -3,18 +3,17 @@
 import { revalidatePath } from "next/cache";
 import { createAdminDbClient } from "@harkness-helper/db/admin";
 import { getCurrentAdminEmail } from "@/lib/auth/admin";
-import type { SaveTranscriptionPromptResult } from "./system-prompts.types";
+import type { SaveSystemPromptResult } from "./system-prompts.types";
 
-// Updates the body (and optionally the label) of an existing system
-// transcription prompt. Phase A only edits the seeded Default; the migration
-// guarantees exactly one such row exists.
-//
-// Service-role write — RLS would allow this too via the admin policy, but
-// using service role keeps the call site uniform with other admin actions.
-export async function saveTranscriptionPrompt(
+// Updates the body (and optionally the label) of any existing system prompt.
+// Admin-gated. The scope='system' filter on the WHERE clause is the security
+// boundary — even if a non-admin somehow reached this action, the filter
+// prevents editing of teacher-scoped prompts.
+
+export async function saveSystemPrompt(
   promptId: string,
-  args: { label?: string; body?: string }
-): Promise<SaveTranscriptionPromptResult> {
+  args: { label?: string; body?: string },
+): Promise<SaveSystemPromptResult> {
   const adminEmail = await getCurrentAdminEmail();
   if (!adminEmail) return { ok: false, message: "Admin only" };
 
@@ -35,14 +34,13 @@ export async function saveTranscriptionPrompt(
     .from("prompts")
     .update(updates)
     .eq("id", promptId)
-    .eq("scope", "system")
-    .eq("purpose", "transcription");
+    .eq("scope", "system");
 
   if (error) {
     if (error.code === "23505") {
       return {
         ok: false,
-        message: "A transcription prompt with that label already exists",
+        message: "A prompt with that label already exists for this purpose",
       };
     }
     return { ok: false, message: error.message };

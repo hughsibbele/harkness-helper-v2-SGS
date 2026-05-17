@@ -2,11 +2,17 @@
 
 import { useState, useTransition } from "react";
 import type { Tables } from "@harkness-helper/db";
-import { saveTranscriptionPrompt } from "@/lib/actions/system-prompts";
+import { saveSystemPrompt } from "@/lib/actions/system-prompts";
 
 type Prompt = Tables<"prompts">;
 
-export function TranscriptionPromptEditor({ prompt }: { prompt: Prompt }) {
+export function PromptEditor({
+  prompt,
+  description,
+}: {
+  prompt: Prompt;
+  description: string;
+}) {
   const [label, setLabel] = useState(prompt.label);
   const [body, setBody] = useState(prompt.body);
   const [pending, startTransition] = useTransition();
@@ -21,7 +27,7 @@ export function TranscriptionPromptEditor({ prompt }: { prompt: Prompt }) {
   function onSave() {
     setFeedback(null);
     startTransition(async () => {
-      const r = await saveTranscriptionPrompt(prompt.id, {
+      const r = await saveSystemPrompt(prompt.id, {
         label: label !== prompt.label ? label : undefined,
         body: body !== prompt.body ? body : undefined,
       });
@@ -41,6 +47,13 @@ export function TranscriptionPromptEditor({ prompt }: { prompt: Prompt }) {
 
   return (
     <section className="space-y-4 rounded-sm border border-stone-200 bg-white p-5 shadow-sm">
+      <header>
+        <h2 className="text-base font-semibold tracking-tight text-ink">
+          {purposeTitle(prompt.purpose)}
+        </h2>
+        <p className="mt-0.5 text-xs italic text-cool-gray">{description}</p>
+      </header>
+
       <div>
         <label className="ehs-eyebrow mb-1.5 block text-cool-gray">
           Label
@@ -58,14 +71,10 @@ export function TranscriptionPromptEditor({ prompt }: { prompt: Prompt }) {
         <label className="ehs-eyebrow mb-1.5 block text-cool-gray">
           Prompt body
         </label>
-        <p className="mb-1.5 text-xs italic text-cool-gray">
-          Markdown. Gemini receives this verbatim before the audio. The audio
-          itself follows in the same request.
-        </p>
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          rows={28}
+          rows={20}
           spellCheck={false}
           className="w-full resize-y rounded-sm border border-stone-300 bg-white px-3 py-2 font-mono text-xs leading-relaxed shadow-inner focus:border-dark-blue focus:outline-none"
         />
@@ -103,6 +112,21 @@ export function TranscriptionPromptEditor({ prompt }: { prompt: Prompt }) {
       </div>
     </section>
   );
+}
+
+function purposeTitle(purpose: string): string {
+  switch (purpose) {
+    case "transcription":
+      return "Transcription";
+    case "summary":
+      return "Group feedback (summary + evaluative comment)";
+    case "speaker_identification":
+      return "Speaker identification";
+    case "individual_feedback":
+      return "Individual feedback";
+    default:
+      return purpose;
+  }
 }
 
 function formatDate(iso: string): string {
