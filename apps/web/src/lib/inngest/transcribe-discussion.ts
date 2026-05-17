@@ -17,6 +17,7 @@ import {
   getActiveSummaryPrompt,
   getActiveTranscriptionPrompt,
 } from "@harkness-helper/prompts";
+import { pushDiscussionToSuperGrader } from "@/lib/peers/notify";
 import { inngest } from "./client";
 
 const BUCKET = "discussion-audio";
@@ -267,10 +268,20 @@ export const transcribeDiscussion = inngest.createFunction(
       if (error) throw new Error(`save summary: ${error.message}`);
     });
 
+    // Best-effort fan-out to super-grader. pushDiscussionToSuperGrader
+    // never throws — failures land in `discussions.super_grader_response`
+    // and `super_grader_post_status` for a future retry surface. We do
+    // NOT want this step to fail the function, since that would invoke
+    // the onFailure handler and clobber state='transcribed'.
+    const pushOutcome = await step.run("push-to-super-grader", async () => {
+      return pushDiscussionToSuperGrader(discussionId);
+    });
+
     return {
       discussionId,
       transcriptLength: scrubbedTranscript.length,
       summaryLength: scrubbedSummary.length,
+      pushOutcome,
     };
   },
 );
