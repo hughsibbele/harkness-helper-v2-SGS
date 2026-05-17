@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "env -u GEMINI_API_KEY next dev",
+    "build": "env -u GEMINI_API_KEY next build",
+    "start": "env -u GEMINI_API_KEY next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit"
   },
