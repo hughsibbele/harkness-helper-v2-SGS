@@ -37,8 +37,39 @@ See [`../BUILD_PLAN.md`](../BUILD_PLAN.md) for ecosystem-wide milestones.
 - Live state updates on `/dashboard` via `router.refresh()` polling every
   5s while any row is `uploaded` or `transcribing`.
 
-**Phase D (super-grader webhook + prompt-pull) — NOT yet wired.** Endpoints
-+ outbound webhook to land in M2a follow-up.
+**Phase D (super-grader webhook + prompt-pull) — done 2026-05-17.**
+- `GET /api/super-grader/result` returns `PeerResultEnvelope<HarknessSummary>`
+  for a `(canvas_user_id, canvas_assignment_id)` pair. Joins
+  `participations → students` by `canvas_user_id`, picks the newest
+  discussion in `state in ('transcribed','posted_to_super_grader')`,
+  signs the audio URL with a 1-hour TTL, returns transcript + summary
+  as-is (already roster-scrubbed at write time).
+- `GET /api/super-grader/prompt?key=<purpose>` returns
+  `{body, version, updated_at}` for super-grader's `fetchLivePrompt`.
+  `?key=` maps to `prompts.purpose` (transcription / summary /
+  speaker_identification / individual_feedback). HK has no `version`
+  column, so version is derived from `updated_at` as epoch seconds.
+- Bearer-auth via `HARKNESS_API_TOKEN` (`lib/peers/auth.ts`).
+- Inngest's `transcribe-discussion` gained a `push-to-super-grader` step
+  after `save-summary`. `pushDiscussionToSuperGrader` in
+  `lib/peers/notify.ts` fans out one POST per participant in parallel
+  (SG's `peer_results` is keyed per-student). Status persisted to
+  `discussions.super_grader_post_status` + `super_grader_response`
+  (jsonb). On full success, `state` → `posted_to_super_grader`. Best-
+  effort: pushDiscussionToSuperGrader never throws, so onFailure can't
+  clobber `state='transcribed'`.
+- `HARKNESS_TRANSCRIPT_MARKER` + `prependHarknessMarker` at
+  `lib/peers/marker.ts` (forward-compat — HK doesn't post to Canvas
+  submission bodies today).
+- Inngest cloud setup live: `INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY`,
+  `NEXT_PUBLIC_APP_URL` set on Vercel; `transcribe-discussion` synced.
+  `/api/inngest` returns 401 to unsigned GETs (correct posture).
+
+**HK ↔ SG end-to-end is unexercised in production.** The first real
+classroom recording transcribed after 2026-05-17 will fire the
+outbound webhook for the first time. Diagnostics land in
+`discussions.super_grader_post_status` + `super_grader_response` —
+check those if SG doesn't show a Harkness card.
 
 **Save-to-Drive — done.** Per-row Drive menu with Save audio / Save transcript
 / Save summary / Save all to folder (folder named
@@ -142,6 +173,7 @@ Env vars (all in `.env.example`):
 - Inngest: `INNGEST_DEV=1` (local) OR `INNGEST_EVENT_KEY` + `INNGEST_SIGNING_KEY` (prod)
 - Canvas: `CANVAS_BASE_URL`, `CANVAS_API_TOKEN` (single-tenant by design;
   per-teacher token storage is a future M2a follow-up)
-- Suite peer integration (deferred to Phase D): `SUPER_GRADER_SALT`,
-  `SUPER_GRADER_API_URL`, `SUPER_GRADER_INGEST_TOKEN`, `HARKNESS_API_TOKEN`
+- Suite peer integration (live as of Phase D): `SUPER_GRADER_SALT`,
+  `SUPER_GRADER_API_URL`, `SUPER_GRADER_INGEST_TOKEN`, `HARKNESS_API_TOKEN`,
+  `NEXT_PUBLIC_APP_URL`
 - Sentry (optional): `SENTRY_DSN`, `NEXT_PUBLIC_SENTRY_DSN`
