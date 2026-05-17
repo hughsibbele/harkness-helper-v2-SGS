@@ -122,20 +122,6 @@ export const transcribeDiscussion = inngest.createFunction(
 
     const transcript = await step.run("gemini-transcribe", async () => {
       const apiKey = process.env.GEMINI_API_KEY;
-      // Temporary diagnostic: surface whether the env var is reaching the
-      // function context, without leaking the value. Remove once root cause
-      // is found.
-      logger.info("GEMINI_API_KEY diagnostic", {
-        present: !!apiKey,
-        length: apiKey?.length ?? 0,
-        starts: apiKey?.slice(0, 6) ?? "",
-        endsClean:
-          apiKey != null &&
-          apiKey.length > 0 &&
-          !apiKey.endsWith("\n") &&
-          !apiKey.endsWith(" ") &&
-          !apiKey.endsWith('"'),
-      });
       if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
 
       const { data: signed, error: signErr } = await admin.storage
