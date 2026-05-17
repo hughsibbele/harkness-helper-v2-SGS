@@ -93,11 +93,17 @@ export function Recorder({
   }
 
   function pickMimeType(): string {
+    // Gemini's Files API accepts wav/mp3/aiff/aac/ogg/flac (NOT webm/opus).
+    // Prefer mp4 (Safari + recent Chrome both support) and ogg/opus, fall
+    // back to webm only when nothing else is available — the transcription
+    // step will fail on webm with a clear error rather than producing a
+    // worse silent issue.
     const candidates = [
+      "audio/mp4",
+      "audio/mp4;codecs=mp4a.40.2",
+      "audio/ogg;codecs=opus",
       "audio/webm;codecs=opus",
       "audio/webm",
-      "audio/mp4",
-      "audio/ogg;codecs=opus",
     ];
     for (const c of candidates) {
       if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(c)) {

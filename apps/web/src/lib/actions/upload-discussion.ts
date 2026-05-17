@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { anonToken } from "@harkness-helper/anonymizer";
 import { createAdminDbClient } from "@harkness-helper/db/admin";
 import { getCurrentTeacher } from "@/lib/auth/teacher";
+import { inngest } from "@/lib/inngest/client";
 import type { UploadDiscussionResult } from "./upload-discussion.types";
 
 const BUCKET = "discussion-audio";
@@ -159,6 +160,19 @@ export async function uploadDiscussion(
         };
       }
     }
+  }
+
+  // Kick off the transcription pipeline. Fire-and-forget — if Inngest is
+  // misconfigured locally (no `inngest-cli dev` running), the discussion
+  // still lands and the event is dropped at the edge. Production has the
+  // INNGEST_EVENT_KEY env var and the cloud endpoint.
+  try {
+    await inngest.send({
+      name: "discussion.uploaded",
+      data: { discussionId },
+    });
+  } catch {
+    // Don't block the upload's success on a missing Inngest dev server.
   }
 
   revalidatePath("/dashboard");
