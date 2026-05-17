@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import {
   saveAllToDrive,
   saveAudioToDrive,
+  saveSummaryToDrive,
   saveTranscriptToDrive,
 } from "@/lib/actions/save-to-drive";
 import type { SaveToDriveResult } from "@/lib/actions/save-to-drive.types";
@@ -12,10 +13,12 @@ export function SaveToDriveMenu({
   discussionId,
   hasAudio,
   hasTranscript,
+  hasSummary,
 }: {
   discussionId: string;
   hasAudio: boolean;
   hasTranscript: boolean;
+  hasSummary: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -56,9 +59,16 @@ export function SaveToDriveMenu({
           <MenuItem
             disabled={!hasTranscript || pending}
             onClick={() => run(saveTranscriptToDrive)}
-            title={!hasTranscript ? "No transcript yet" : "Save transcript as Doc"}
+            title={!hasTranscript ? "No transcript yet" : "Save verbatim transcript as Doc"}
           >
             Save transcript
+          </MenuItem>
+          <MenuItem
+            disabled={!hasSummary || pending}
+            onClick={() => run(saveSummaryToDrive)}
+            title={!hasSummary ? "No summary yet" : "Save narrative summary as Doc"}
+          >
+            Save summary
           </MenuItem>
           <MenuItem
             disabled={!hasAudio || pending}

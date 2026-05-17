@@ -17,6 +17,7 @@ type DiscussionCtx = {
   teacher_id: string;
   audio_url: string;
   transcript: string | null;
+  summary: string | null;
   recorded_at: string;
   state: string;
   canvas_assignment_id: string;
@@ -35,7 +36,7 @@ async function loadDiscussionCtx(
   const { data: d, error } = await admin
     .from("discussions")
     .select(
-      "id,teacher_id,audio_url,transcript,recorded_at,state,canvas_assignment_id,canvas_course_id,canvas_section_id",
+      "id,teacher_id,audio_url,transcript,summary,recorded_at,state,canvas_assignment_id,canvas_course_id,canvas_section_id",
     )
     .eq("id", discussionId)
     .maybeSingle();
@@ -178,6 +179,29 @@ export async function saveTranscriptToDrive(
   }
 }
 
+export async function saveSummaryToDrive(
+  discussionId: string,
+): Promise<SaveToDriveResult> {
+  try {
+    const teacher = await getCurrentTeacher();
+    const ctx = await loadDiscussionCtx(discussionId, teacher.id);
+    if ("error" in ctx) return { ok: false, message: ctx.error };
+    if (!ctx.summary) {
+      return { ok: false, message: "No summary yet for this discussion." };
+    }
+
+    const client = await getTeacherGoogleClient(teacher.id);
+    const title = `${discussionLabel(ctx)} · summary`;
+    const ref = await createDoc(client, title, ctx.summary, null);
+    return {
+      ok: true,
+      links: [{ kind: "summary", webViewLink: ref.webViewLink }],
+    };
+  } catch (err) {
+    return { ok: false, message: mapErr(err) };
+  }
+}
+
 export async function saveAllToDrive(
   discussionId: string,
 ): Promise<SaveToDriveResult> {
@@ -194,7 +218,7 @@ export async function saveAllToDrive(
     const folderName = discussionLabel(ctx);
     const folder = await createFolder(client, folderName);
     const links: Array<{
-      kind: "folder" | "audio" | "transcript";
+      kind: "folder" | "audio" | "transcript" | "summary";
       webViewLink: string;
     }> = [{ kind: "folder", webViewLink: folder.webViewLink }];
 
@@ -212,6 +236,11 @@ export async function saveAllToDrive(
     if (ctx.transcript) {
       const docRef = await createDoc(client, "transcript", ctx.transcript, folder.id);
       links.push({ kind: "transcript", webViewLink: docRef.webViewLink });
+    }
+
+    if (ctx.summary) {
+      const docRef = await createDoc(client, "summary", ctx.summary, folder.id);
+      links.push({ kind: "summary", webViewLink: docRef.webViewLink });
     }
 
     return { ok: true, links };

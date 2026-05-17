@@ -24,6 +24,7 @@ export type DiscussionListRow = {
   canvas_section_id: string | null;
   audio_signed_url: string | null;
   has_transcript: boolean;
+  has_summary: boolean;
 };
 
 const STATE_STYLES: Record<DiscussionState, { dot: string; label: string }> = {
@@ -176,6 +177,7 @@ export function DiscussionList({
                       discussionId={d.id}
                       hasAudio={d.audio_signed_url !== null}
                       hasTranscript={d.has_transcript}
+                      hasSummary={d.has_summary}
                     />
                     <DeleteDiscussionButton discussionId={d.id} />
                   </div>

@@ -1,20 +1,29 @@
-// Transcribe a Harkness discussion via Gemini 2.5 Flash audio.
+// Two-pass: verbatim transcript (audio → text) then narrative summary
+// (transcript → text). Triggered by `discussion.uploaded`. Durable steps so
+// a mid-flow failure re-runs only the failed step on retry.
 //
-// Triggered by `discussion.uploaded` (emitted from the upload server action
-// after a successful discussions insert). Durable steps so a mid-flow failure
-// re-runs only the failed step on retry. onFailure handler marks the
-// discussion row as failed after retries are exhausted.
+// State flow:
+//   uploaded → transcribing → transcribed (terminal happy)
+//   any step failure (after retries) → failed (via onFailure handler)
+//
+// If transcript saves but summary fails, the row keeps the transcript and
+// gets state='failed' with an error_message. The Save-to-Drive UI still
+// works for the transcript in that case.
 
 import { GoogleGenAI } from "@google/genai";
 import { scrubText, type AnonymizableStudent } from "@harkness-helper/anonymizer";
 import { createAdminDbClient } from "@harkness-helper/db/admin";
-import { getActiveTranscriptionPrompt } from "@harkness-helper/prompts";
+import {
+  getActiveSummaryPrompt,
+  getActiveTranscriptionPrompt,
+} from "@harkness-helper/prompts";
 import { inngest } from "./client";
 
 const BUCKET = "discussion-audio";
-const SIGNED_URL_TTL_SECONDS = 60 * 30; // 30 min: enough to fetch + upload to Gemini
+const SIGNED_URL_TTL_SECONDS = 60 * 30;
 const FILES_API_POLL_INTERVAL_MS = 2000;
 const FILES_API_POLL_TIMEOUT_MS = 5 * 60 * 1000;
+const GEMINI_MODEL = "gemini-2.5-flash";
 
 type RosterStudent = {
   canvas_user_id: string;
@@ -28,7 +37,6 @@ export const transcribeDiscussion = inngest.createFunction(
     retries: 2,
     triggers: [{ event: "discussion.uploaded" }],
     onFailure: async ({ event, error }) => {
-      // FailureEvent wraps the original: event.data.event holds it.
       const orig = (event.data as { event?: { data?: { discussionId?: string } } })
         .event;
       const discussionId = orig?.data?.discussionId;
@@ -66,6 +74,8 @@ export const transcribeDiscussion = inngest.createFunction(
       return { skipped: true, state: discussion.state };
     }
 
+    // One rate-limit check up-front. Two Gemini calls per discussion is the
+    // implicit cost; teachers adjust their daily cap accordingly.
     await step.run("check-rate-limit", async () => {
       const cap = Number.parseInt(
         process.env.GEMINI_DEFAULT_DAILY_CAP ?? "15",
@@ -92,8 +102,11 @@ export const transcribeDiscussion = inngest.createFunction(
       if (error) throw new Error(`mark transcribing: ${error.message}`);
     });
 
-    const ctx = await step.run("load-prompt-and-roster", async () => {
-      const prompt = await getActiveTranscriptionPrompt();
+    const ctx = await step.run("load-prompts-and-roster", async () => {
+      const [transcriptionPrompt, summaryPrompt] = await Promise.all([
+        getActiveTranscriptionPrompt(),
+        getActiveSummaryPrompt(),
+      ]);
       const { data: rosterRow, error: rosterErr } = await admin
         .from("course_rosters")
         .select("students")
@@ -114,13 +127,16 @@ export const transcribeDiscussion = inngest.createFunction(
           email: s.email,
         }));
       return {
-        promptId: prompt.id,
-        promptBody: prompt.body,
+        transcriptionPromptId: transcriptionPrompt.id,
+        transcriptionPromptBody: transcriptionPrompt.body,
+        summaryPromptId: summaryPrompt.id,
+        summaryPromptBody: summaryPrompt.body,
         roster,
       };
     });
 
-    const transcript = await step.run("gemini-transcribe", async () => {
+    // Pass 1: verbatim transcript from audio.
+    const rawTranscript = await step.run("gemini-transcribe", async () => {
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
 
@@ -130,7 +146,6 @@ export const transcribeDiscussion = inngest.createFunction(
       if (signErr || !signed?.signedUrl) {
         throw new Error(`signed URL: ${signErr?.message ?? "none returned"}`);
       }
-
       const audioRes = await fetch(signed.signedUrl);
       if (!audioRes.ok) {
         throw new Error(`audio download: ${audioRes.status} ${audioRes.statusText}`);
@@ -138,16 +153,12 @@ export const transcribeDiscussion = inngest.createFunction(
       const audioBlob = await audioRes.blob();
 
       const ai = new GoogleGenAI({ apiKey });
-
-      // Upload via Files API. mimeType must be in Gemini's accepted set
-      // (wav/mp3/aiff/aac/ogg/flac). webm/opus from Chrome will fail here.
       const uploaded = await ai.files.upload({
         file: audioBlob,
         config: { mimeType: audioBlob.type || "audio/mp4" },
       });
       if (!uploaded.name) throw new Error("Gemini Files API returned no name");
 
-      // Poll until ACTIVE — large files take a few seconds to process.
       let file = uploaded;
       const deadline = Date.now() + FILES_API_POLL_TIMEOUT_MS;
       while (file.state !== "ACTIVE") {
@@ -162,7 +173,7 @@ export const transcribeDiscussion = inngest.createFunction(
       }
 
       const result = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: GEMINI_MODEL,
         contents: [
           {
             role: "user",
@@ -173,33 +184,85 @@ export const transcribeDiscussion = inngest.createFunction(
                   mimeType: file.mimeType ?? audioBlob.type,
                 },
               },
-              { text: ctx.promptBody },
+              { text: ctx.transcriptionPromptBody },
             ],
           },
         ],
       });
-
       const text = result.text ?? "";
       if (!text.trim()) throw new Error("Gemini returned an empty transcript");
       return text;
     });
 
-    const scrubbed = await step.run("scrub-names", async () => {
-      return scrubText(transcript, ctx.roster);
+    const scrubbedTranscript = await step.run("scrub-transcript", async () => {
+      return scrubText(rawTranscript, ctx.roster);
     });
 
+    // Save transcript before attempting summary — that way a summary failure
+    // doesn't lose the transcript work.
     await step.run("save-transcript", async () => {
       const { error } = await admin
         .from("discussions")
         .update({
-          transcript: scrubbed,
-          transcription_prompt_id: ctx.promptId,
-          state: "transcribed",
+          transcript: scrubbedTranscript,
+          transcription_prompt_id: ctx.transcriptionPromptId,
         })
         .eq("id", discussionId);
       if (error) throw new Error(`save transcript: ${error.message}`);
     });
 
-    return { discussionId, transcriptLength: scrubbed.length };
+    // Pass 2: narrative summary from the verbatim transcript. Text-only call,
+    // no audio file required — the summary prompt body asks "given a transcript,
+    // produce a summary" and we paste the transcript as input.
+    const rawSummary = await step.run("gemini-summarize", async () => {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
+
+      const ai = new GoogleGenAI({ apiKey });
+      const result = await ai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text:
+                  ctx.summaryPromptBody +
+                  "\n\n---\n\n## Verbatim transcript\n\n" +
+                  scrubbedTranscript,
+              },
+            ],
+          },
+        ],
+      });
+      const text = result.text ?? "";
+      if (!text.trim()) throw new Error("Gemini returned an empty summary");
+      return text;
+    });
+
+    const scrubbedSummary = await step.run("scrub-summary", async () => {
+      // Defense-in-depth: the transcript was already scrubbed before going
+      // into the summary call, but re-run the roster scrub against the output
+      // in case the summary phrasing re-introduced any names somehow.
+      return scrubText(rawSummary, ctx.roster);
+    });
+
+    await step.run("save-summary", async () => {
+      const { error } = await admin
+        .from("discussions")
+        .update({
+          summary: scrubbedSummary,
+          summary_prompt_id: ctx.summaryPromptId,
+          state: "transcribed",
+        })
+        .eq("id", discussionId);
+      if (error) throw new Error(`save summary: ${error.message}`);
+    });
+
+    return {
+      discussionId,
+      transcriptLength: scrubbedTranscript.length,
+      summaryLength: scrubbedSummary.length,
+    };
   },
 );

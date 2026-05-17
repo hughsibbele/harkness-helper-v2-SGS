@@ -89,7 +89,7 @@ export type Database = {
           id: string;
           teacher_id: string | null;
           scope: "system" | "teacher";
-          purpose: "transcription";
+          purpose: "transcription" | "summary";
           label: string;
           body: string;
           is_default: boolean;
@@ -100,7 +100,7 @@ export type Database = {
           id?: string;
           teacher_id?: string | null;
           scope: "system" | "teacher";
-          purpose: "transcription";
+          purpose: "transcription" | "summary";
           label: string;
           body: string;
           is_default?: boolean;
@@ -111,7 +111,7 @@ export type Database = {
           id?: string;
           teacher_id?: string | null;
           scope?: "system" | "teacher";
-          purpose?: "transcription";
+          purpose?: "transcription" | "summary";
           label?: string;
           body?: string;
           is_default?: boolean;
@@ -182,7 +182,9 @@ export type Database = {
           recorded_at: string;
           audio_url: string;
           transcript: string | null;
+          summary: string | null;
           transcription_prompt_id: string | null;
+          summary_prompt_id: string | null;
           state: "uploaded" | "transcribing" | "transcribed" | "posted_to_super_grader" | "failed";
           super_grader_post_status: "pending" | "posted" | "error";
           super_grader_response: Json | null;
@@ -199,7 +201,9 @@ export type Database = {
           recorded_at: string;
           audio_url: string;
           transcript?: string | null;
+          summary?: string | null;
           transcription_prompt_id?: string | null;
+          summary_prompt_id?: string | null;
           state?: "uploaded" | "transcribing" | "transcribed" | "posted_to_super_grader" | "failed";
           super_grader_post_status?: "pending" | "posted" | "error";
           super_grader_response?: Json | null;
@@ -216,7 +220,9 @@ export type Database = {
           recorded_at?: string;
           audio_url?: string;
           transcript?: string | null;
+          summary?: string | null;
           transcription_prompt_id?: string | null;
+          summary_prompt_id?: string | null;
           state?: "uploaded" | "transcribing" | "transcribed" | "posted_to_super_grader" | "failed";
           super_grader_post_status?: "pending" | "posted" | "error";
           super_grader_response?: Json | null;
