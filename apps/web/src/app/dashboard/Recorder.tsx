@@ -29,6 +29,7 @@ export function Recorder({
   const segmentStartRef = useRef<number>(0);
   const accumulatedRef = useRef<number>(0);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
   useEffect(() => {
     if (state === "recording") {
@@ -50,8 +51,46 @@ export function Recorder({
     return () => {
       if (audioUrl) URL.revokeObjectURL(audioUrl);
       streamRef.current?.getTracks().forEach((t) => t.stop());
+      void releaseWakeLock();
     };
   }, [audioUrl]);
+
+  // Re-acquire the wake lock when the user returns to the tab mid-recording.
+  // The spec auto-releases the lock on visibility change, so we must request again.
+  useEffect(() => {
+    function onVisibilityChange() {
+      if (
+        document.visibilityState === "visible" &&
+        (state === "recording" || state === "paused")
+      ) {
+        void acquireWakeLock();
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () =>
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [state]);
+
+  async function acquireWakeLock(): Promise<void> {
+    if (typeof navigator === "undefined" || !("wakeLock" in navigator)) return;
+    try {
+      wakeLockRef.current = await navigator.wakeLock.request("screen");
+    } catch {
+      // Wake lock isn't critical — recording works without it; screen may lock
+      // during long recordings on a mobile device. Firefox doesn't support it.
+    }
+  }
+
+  async function releaseWakeLock(): Promise<void> {
+    const lock = wakeLockRef.current;
+    if (!lock) return;
+    wakeLockRef.current = null;
+    try {
+      await lock.release();
+    } catch {
+      // ignore
+    }
+  }
 
   function pickMimeType(): string {
     const candidates = [
@@ -111,9 +150,9 @@ export function Recorder({
       segmentStartRef.current = Date.now();
       setElapsedMs(0);
       setState("recording");
+      void acquireWakeLock();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(`Microphone unavailable: ${msg}`);
+      setError(micErrorMessage(err));
       setState("idle");
     }
   }
@@ -139,6 +178,7 @@ export function Recorder({
     }
     recorderRef.current.stop();
     setState("stopped");
+    void releaseWakeLock();
   }
 
   function reset() {
@@ -156,11 +196,11 @@ export function Recorder({
   const timer = formatElapsed(elapsedMs);
 
   return (
-    <div className="rounded-lg border-2 border-stone-300 bg-white p-6 shadow-sm">
-      <div className="flex items-center gap-6">
+    <div className="rounded-lg border-2 border-stone-300 bg-white p-4 shadow-sm sm:p-6">
+      <div className="flex items-center gap-3 sm:gap-6">
         <RecordButton state={state} onStart={start} onStop={stop} />
-        <div className="flex-1">
-          <div className="font-mono text-4xl tabular-nums text-ink">
+        <div className="min-w-0 flex-1">
+          <div className="font-mono text-3xl tabular-nums text-ink sm:text-4xl">
             {timer}
           </div>
           <div className="mt-1 text-xs uppercase tracking-wide text-cool-gray">
@@ -171,7 +211,7 @@ export function Recorder({
           <button
             type="button"
             onClick={pause}
-            className="rounded-md border border-stone-300 bg-white px-3 py-1.5 text-sm font-medium text-ink hover:bg-stone-100"
+            className="shrink-0 rounded-md border border-stone-300 bg-white px-3 py-1.5 text-sm font-medium text-ink hover:bg-stone-100"
           >
             Pause
           </button>
@@ -180,7 +220,7 @@ export function Recorder({
           <button
             type="button"
             onClick={resume}
-            className="rounded-md border border-stone-300 bg-white px-3 py-1.5 text-sm font-medium text-ink hover:bg-stone-100"
+            className="shrink-0 rounded-md border border-stone-300 bg-white px-3 py-1.5 text-sm font-medium text-ink hover:bg-stone-100"
           >
             Resume
           </button>
@@ -189,7 +229,7 @@ export function Recorder({
           <button
             type="button"
             onClick={reset}
-            className="rounded-md border border-stone-300 bg-white px-3 py-1.5 text-sm font-medium text-cool-gray hover:bg-stone-100"
+            className="shrink-0 rounded-md border border-stone-300 bg-white px-3 py-1.5 text-sm font-medium text-cool-gray hover:bg-stone-100"
           >
             Re-record
           </button>
@@ -224,9 +264,9 @@ function RecordButton({
         type="button"
         onClick={onStart}
         aria-label="Start recording"
-        className="grid h-20 w-20 place-items-center rounded-full bg-red-600 text-white shadow-md transition hover:bg-red-700 active:scale-95"
+        className="grid h-16 w-16 shrink-0 place-items-center rounded-full bg-red-600 text-white shadow-md transition hover:bg-red-700 active:scale-95 sm:h-20 sm:w-20"
       >
-        <span className="block h-7 w-7 rounded-full bg-white" />
+        <span className="block h-6 w-6 rounded-full bg-white sm:h-7 sm:w-7" />
       </button>
     );
   }
@@ -236,11 +276,11 @@ function RecordButton({
       onClick={onStop}
       aria-label="Stop recording"
       className={
-        "grid h-20 w-20 place-items-center rounded-full bg-red-600 text-white shadow-md transition hover:bg-red-700 active:scale-95" +
+        "grid h-16 w-16 shrink-0 place-items-center rounded-full bg-red-600 text-white shadow-md transition hover:bg-red-700 active:scale-95 sm:h-20 sm:w-20" +
         (state === "recording" ? " animate-pulse" : "")
       }
     >
-      <span className="block h-6 w-6 rounded-sm bg-white" />
+      <span className="block h-5 w-5 rounded-sm bg-white sm:h-6 sm:w-6" />
     </button>
   );
 }
@@ -263,4 +303,24 @@ function formatElapsed(ms: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function micErrorMessage(err: unknown): string {
+  const name = err instanceof Error ? err.name : "";
+  switch (name) {
+    case "NotAllowedError":
+      return "Microphone access was denied. iOS: Settings → Safari → Microphone. Desktop Chrome: click the lock icon in the address bar and reset the microphone permission.";
+    case "NotFoundError":
+      return "No microphone found. Plug one in or check your device's audio input.";
+    case "NotReadableError":
+      return "The microphone is in use by another app. Close anything else recording or on a call (Zoom, Meet, FaceTime) and try again.";
+    case "OverconstrainedError":
+      return "Microphone constraints couldn't be satisfied. Try a different audio input device.";
+    case "SecurityError":
+      return "Microphone blocked by browser security. Make sure the page is loaded over https:// (or localhost).";
+    default:
+      return err instanceof Error
+        ? `Microphone unavailable: ${err.message}`
+        : "Microphone unavailable.";
+  }
 }
