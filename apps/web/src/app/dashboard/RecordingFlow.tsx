@@ -89,7 +89,6 @@ export function RecordingFlow({
       </section>
 
       <section className="rounded-md border border-stone-200 bg-white p-5">
-        <h2 className="ehs-eyebrow mb-3 text-cool-gray">Upload</h2>
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
@@ -103,37 +102,27 @@ export function RecordingFlow({
                   ? "Pick a course and assignment first"
                   : pending
                     ? "Uploading…"
-                    : "Upload to Harkness"
+                    : "Upload"
             }
           >
             {pending ? "Uploading…" : "Upload recording"}
           </button>
+          {audio && target.assignment && !pending && !uploadResult && (
+            <span className="text-xs text-cool-gray">
+              {formatDuration(audio.durationMs)} · {formatBytes(audio.blob.size)}{" "}
+              · {target.participantIds.length} participant
+              {target.participantIds.length === 1 ? "" : "s"}
+            </span>
+          )}
           {uploadResult && uploadResult.ok && (
             <span className="text-xs text-emerald-700">
-              Uploaded. The transcription job will kick off automatically when
-              Phase C lands.
+              Uploaded. Transcription is queued.
             </span>
           )}
           {uploadResult && !uploadResult.ok && (
             <span className="text-xs text-red-700">{uploadResult.message}</span>
           )}
         </div>
-        <p className="mt-2 text-xs text-cool-gray">
-          {audio
-            ? `Recording captured (${formatBytes(audio.blob.size)}, ${formatDuration(audio.durationMs)}).`
-            : "Recording: none yet."}{" "}
-          {target.assignment
-            ? `Target: ${target.assignment.name}`
-            : "Target: not picked"}
-          {target.course && (
-            <>
-              {" · "}
-              {target.participantIds.length} participant
-              {target.participantIds.length === 1 ? "" : "s"}
-            </>
-          )}
-          .
-        </p>
       </section>
     </div>
   );

@@ -12,7 +12,6 @@ import type {
   RosterStudent,
 } from "./TargetPicker";
 
-const RECENT_DISCUSSIONS_LIMIT = 10;
 const SIGNED_URL_TTL_SECONDS = 60 * 60; // 1 hour
 
 function formatSyncedAt(iso: string | null): string {
@@ -22,6 +21,13 @@ function formatSyncedAt(iso: string | null): string {
     dateStyle: "medium",
     timeStyle: "short",
   });
+}
+
+// EHS academic year starts in August. If today is August or later, the year
+// began Aug 1 of this calendar year; otherwise the previous calendar year.
+function academicYearStart(now: Date = new Date()): string {
+  const year = now.getMonth() >= 7 ? now.getFullYear() : now.getFullYear() - 1;
+  return `${year}-08-01`;
 }
 
 export default async function DashboardPage() {
@@ -51,8 +57,9 @@ export default async function DashboardPage() {
           "id,recorded_at,state,error_message,canvas_course_id,canvas_assignment_id,canvas_section_id,audio_url",
         )
         .eq("teacher_id", teacher.id)
-        .order("created_at", { ascending: false })
-        .limit(RECENT_DISCUSSIONS_LIMIT),
+        .gte("recorded_at", academicYearStart())
+        .order("recorded_at", { ascending: false })
+        .order("created_at", { ascending: false }),
     ]);
 
   const courses: CourseOption[] = (coursesRes.data ?? []).map((c) => ({
@@ -131,7 +138,7 @@ export default async function DashboardPage() {
       />
 
       <section className="rounded-md border border-stone-200 bg-white p-5">
-        <h2 className="ehs-eyebrow mb-3 text-cool-gray">Recent discussions</h2>
+        <h2 className="ehs-eyebrow mb-3 text-cool-gray">Discussions this year</h2>
         <DiscussionList
           discussions={discussions}
           courseLabelById={courseLabelById}

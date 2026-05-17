@@ -36,31 +36,55 @@ export function DeleteDiscussionButton({
       <button
         type="button"
         onClick={() => setConfirm(true)}
-        className="text-[11px] text-cool-gray underline-offset-2 hover:text-red-700 hover:underline"
+        aria-label="Delete discussion"
+        className="inline-flex items-center gap-1 rounded-md border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-cool-gray hover:border-red-300 hover:bg-red-50 hover:text-red-700"
       >
+        <TrashIcon />
         Delete
       </button>
     );
   }
 
   return (
-    <span className="flex items-center gap-1 text-[11px]">
+    <span className="flex items-center gap-1 text-xs">
       <button
         type="button"
         onClick={run}
         disabled={pending}
-        className="rounded-md bg-red-600 px-2 py-0.5 font-medium text-white hover:bg-red-700 disabled:opacity-50"
+        className="rounded-md bg-red-600 px-2.5 py-1 font-medium text-white hover:bg-red-700 disabled:opacity-50"
       >
-        {pending ? "Deleting…" : "Confirm"}
+        {pending ? "Deleting…" : "Confirm delete"}
       </button>
       <button
         type="button"
         onClick={() => setConfirm(false)}
         disabled={pending}
-        className="rounded-md px-2 py-0.5 text-cool-gray hover:bg-stone-100 disabled:opacity-50"
+        className="rounded-md border border-stone-300 bg-white px-2.5 py-1 text-cool-gray hover:bg-stone-100 disabled:opacity-50"
       >
         Cancel
       </button>
     </span>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M2.5 4h11" />
+      <path d="M6 4V2.5h4V4" />
+      <path d="M3.5 4l.5 9a1 1 0 001 1h6a1 1 0 001-1l.5-9" />
+      <path d="M6.5 7v4" />
+      <path d="M9.5 7v4" />
+    </svg>
   );
 }
