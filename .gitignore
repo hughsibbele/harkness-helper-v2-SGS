@@ -10,3 +10,6 @@ dist
 .env*.local
 
 .DS_Store
+
+# Supabase CLI scratch state
+supabase/.temp/
