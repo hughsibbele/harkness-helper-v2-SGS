@@ -19,6 +19,12 @@ export default async function DashboardLayout({
       >
         Dashboard
       </Link>
+      <Link
+        href="/dashboard/setup"
+        className="text-ink transition-colors hover:text-maroon"
+      >
+        Canvas &amp; Drive
+      </Link>
       {showAdminLink && (
         <Link
           href="/admin"
