@@ -71,6 +71,7 @@ export function TargetPicker({
   // Depend only on the stable parent prop + courseId — courseRoster is
   // re-derived per render so its array refs change every render and would
   // cause an infinite loop here.
+  /* eslint-disable react-hooks/set-state-in-effect -- derived selection reset on external prop change */
   useEffect(() => {
     const sections = courseId
       ? (rostersByCourseId[courseId]?.sections ?? [])
@@ -95,6 +96,7 @@ export function TargetPicker({
       : students;
     setParticipantIds(new Set(pool.map((s) => s.canvas_user_id)));
   }, [courseId, sectionId, rostersByCourseId]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const selectedSection =
     courseRoster.sections.find((s) => s.id === sectionId) ?? null;
@@ -276,7 +278,7 @@ export function TargetPicker({
                       type="checkbox"
                       checked={checked}
                       onChange={() => toggleParticipant(s.canvas_user_id)}
-                      className="h-4 w-4 rounded border-stone-300 text-ink focus:ring-stone-500"
+                      className="h-4 w-4 rounded border-stone-300 accent-maroon focus:ring-maroon/40"
                     />
                     <span className="truncate text-ink">{s.name}</span>
                   </label>
@@ -288,17 +290,22 @@ export function TargetPicker({
       )}
 
       {selectedCourse && selectedAssignment && (
-        <div className="rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-cool-gray">
+        // M6.18d: confirmation summary echoes the bar-pattern's
+        // describeDestination() hint line shape — plain-English summary of
+        // what's about to happen, rendered in italic muted text.
+        <div className="rounded-md border border-maroon/20 bg-maroon/5 px-3 py-2 text-xs italic text-cool-gray">
           Recording will be linked to{" "}
-          <span className="font-medium text-ink">{selectedAssignment.name}</span>{" "}
+          <span className="font-medium not-italic text-ink">
+            {selectedAssignment.name}
+          </span>{" "}
           in{" "}
-          <span className="font-medium text-ink">
+          <span className="font-medium not-italic text-ink">
             {selectedCourse.course_code ?? selectedCourse.name}
           </span>
           {participantIds.size > 0 && (
             <>
               {" "}with{" "}
-              <span className="font-medium text-ink">
+              <span className="font-medium not-italic text-ink">
                 {participantIds.size} participant
                 {participantIds.size === 1 ? "" : "s"}
               </span>
@@ -320,6 +327,9 @@ function Chip({
   onClick: () => void;
   children: React.ReactNode;
 }) {
+  // M6.18d: chip selected state uses maroon to match the bar-pattern's
+  // accent across AID / HAH / OE. Unselected stays neutral so the focus
+  // weight in the picker is on the active choice.
   return (
     <button
       type="button"
@@ -327,8 +337,8 @@ function Chip({
       className={
         "rounded-full border px-3 py-1 text-xs font-medium transition" +
         (selected
-          ? " border-ink bg-ink text-white"
-          : " border-stone-300 bg-white text-cool-gray hover:bg-stone-100")
+          ? " border-maroon bg-maroon text-white"
+          : " border-stone-300 bg-white text-cool-gray hover:border-maroon/40 hover:bg-stone-100")
       }
     >
       {children}
