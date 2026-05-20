@@ -7,6 +7,7 @@ import {
   listCourseAssignments,
   listCourseSections,
   listCourseStudentEnrollments,
+  listCourseStudentUsers,
   normalizeHost,
   type CanvasConfig,
 } from "@harkness-helper/canvas";
@@ -76,14 +77,25 @@ export async function syncCanvasCache(): Promise<CanvasSyncResult> {
     let studentCount = 0;
 
     // Sequential per-course to stay under Canvas's concurrency budget. Per
-    // course we still parallelize the three reads (assignments + enrollments
-    // + sections) — small fan-out, safe.
+    // course we still parallelize the four reads (assignments + enrollments
+    // + users + sections) — small fan-out, safe.
+    //
+    // /enrollments and /users are both needed: enrollments carries
+    // course_section_id (the section accumulator below depends on it),
+    // and /users?include[]=email is the only path that reliably surfaces
+    // real student emails to a teacher-scope token. /enrollments hides
+    // user.email for most students; old code fell back to login_id and
+    // stored that as a fake email, which never matched the student's
+    // Google-OAuth identity at sign-in. Discovered in OE 2026-05-20.
     for (const c of courses) {
-      const [assignments, enrollments, sections] = await Promise.all([
+      const [assignments, enrollments, users, sections] = await Promise.all([
         listCourseAssignments(config, c.id),
         listCourseStudentEnrollments(config, c.id),
+        listCourseStudentUsers(config, c.id),
         listCourseSections(config, c.id),
       ]);
+      const userById = new Map<number, (typeof users)[number]>();
+      for (const u of users) userById.set(u.id, u);
 
       if (assignments.length > 0) {
         const { error } = await admin.from("canvas_assignment_cache").upsert(
@@ -133,10 +145,26 @@ export async function syncCanvasCache(): Promise<CanvasSyncResult> {
           }
           continue;
         }
+        // Email comes from /users (where it's actually populated); fall
+        // back to the enrollment-embedded user only for name. Reject
+        // anything that isn't email-shaped rather than storing login_id
+        // as a fake email — old code did the fallback and silently
+        // poisoned the roster.
+        const userRecord = userById.get(e.user.id);
+        const rawEmail = (
+          userRecord?.email ??
+          userRecord?.primary_email ??
+          ""
+        )
+          .trim()
+          .toLowerCase();
+        if (!rawEmail || !rawEmail.includes("@")) {
+          continue;
+        }
         studentsById.set(cuid, {
           canvas_user_id: cuid,
-          name: e.user.name,
-          email: e.user.email ?? e.user.login_id ?? null,
+          name: userRecord?.name ?? e.user.name,
+          email: rawEmail,
           section_ids: [sectionId],
         });
       }

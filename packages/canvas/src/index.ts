@@ -15,8 +15,9 @@ export type CanvasUser = {
   name: string;
   short_name?: string;
   sortable_name?: string;
+  email?: string | null;
   primary_email?: string;
-  login_id?: string;
+  login_id?: string | null;
 };
 
 export type CanvasTerm = {
@@ -248,6 +249,27 @@ export async function listCourseStudentEnrollments(
     `/courses/${canvasCourseId}/enrollments?` +
     "type[]=StudentEnrollment&state[]=active&include[]=user&per_page=100";
   return paginate<CanvasEnrollment>(config, path);
+}
+
+/**
+ * Students in a course as user records (one row per user, deduped by
+ * Canvas — no section-fanout). Hits `/courses/:id/users` which exposes
+ * `email` to teacher-scope tokens that the `/enrollments` embedded-user
+ * field withholds. Used as the email source-of-truth in roster sync
+ * alongside /enrollments (which carries section_id for the per-student
+ * section accumulator). Discovered in OE 2026-05-20: /enrollments
+ * returned user.email=null for 21/22 students, the old code fell back
+ * to login_id, and Google-OAuth sign-in never matched the stored
+ * "jsmith23"-style identifiers.
+ */
+export async function listCourseStudentUsers(
+  config: CanvasConfig,
+  canvasCourseId: string | number,
+): Promise<CanvasUser[]> {
+  const path =
+    `/courses/${canvasCourseId}/users?` +
+    "enrollment_type[]=student&enrollment_state[]=active&include[]=email&per_page=100";
+  return paginate<CanvasUser>(config, path);
 }
 
 export type CanvasSection = {
