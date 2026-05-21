@@ -15,8 +15,12 @@ See [`../BUILD_PLAN.md`](../BUILD_PLAN.md) for ecosystem-wide milestones.
   API compatibility; wake-lock on record; per-error mic-denied guidance),
   course chips + searchable assignment combobox (harkness-first, by-due-date
   sort), section chips when a course has 2+, participants checklist
-  (default-all-in-section). Upload writes `discussions` + `participations`
-  rows + audio to the private `discussion-audio` Supabase bucket.
+  (default-all-in-section). Two-phase upload: (a) `prepareDiscussionUpload`
+  server action validates teacher + dedupes + returns a Supabase signed
+  upload URL, (b) client PUTs the audio Blob direct to the
+  `discussion-audio` bucket (bypasses Next.js/Vercel body caps —
+  see Gotchas), (c) `finalizeDiscussion` server action writes
+  `discussions` + `participations` rows and fires the Inngest event.
 - Sync auto-handles Canvas 429s (Retry-After) and sequentializes per-course
   to stay under Canvas's concurrency budget.
 
@@ -121,6 +125,18 @@ via `googleapis` SDK when within 5min of expiry.
 
 ## Gotchas worth remembering
 
+- **Don't POST the audio Blob through a Server Action.** Next.js caps
+  Server Action request bodies at 1 MB by default; Vercel's serverless
+  ceiling is ~4.5 MB regardless of plan. Anything past a couple minutes
+  of recording threw `Body exceeded 1mb limit` as an unhandled exception
+  → 400 with "Uncaught Exception" in Vercel logs, before the action's
+  code ever ran. Fixed 2026-05-20 by splitting upload into
+  `prepareDiscussionUpload` (issues a Supabase signed upload URL) +
+  client `fetch(PUT, signedUrl, blob)` + `finalizeDiscussion`
+  (metadata-only). The blob never crosses Next.js — bucket's 100 MB
+  `file_size_limit` is the real ceiling. If you add another media-upload
+  flow to this app or any sibling, default to this pattern; do NOT
+  shoulder bytes through a Server Action even "just for now."
 - **`GEMINI_API_KEY` in shell shadows .env.local.** Gemini CLI writes
   `export GEMINI_API_KEY="$(cat ~/.gemini-api-key)"` to `~/.zshrc`.
   Next.js's env load order puts shell env above .env files. Fixed in
