@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import type { Tables } from "@harkness-helper/db";
 import { saveSystemPrompt } from "@/lib/actions/system-prompts";
+import { useAutoSaveDispatch } from "@/components/auto-save/context";
+import { useAutoSaveForm } from "@/components/auto-save/useAutoSaveForm";
 
 type Prompt = Tables<"prompts">;
 
@@ -13,37 +15,42 @@ export function PromptEditor({
   prompt: Prompt;
   description: string;
 }) {
-  const [label, setLabel] = useState(prompt.label);
-  const [body, setBody] = useState(prompt.body);
-  const [pending, startTransition] = useTransition();
-  const [feedback, setFeedback] = useState<
-    | null
-    | { kind: "ok"; message: string }
-    | { kind: "error"; message: string }
-  >(null);
+  const [updatedAt, setUpdatedAt] = useState(prompt.updated_at);
+  const dispatch = useAutoSaveDispatch();
+  const [, startTransition] = useTransition();
+  const formRef = useRef<HTMLFormElement>(null);
+  const labelRef = useRef<HTMLInputElement>(null);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
 
-  const dirty = label !== prompt.label || body !== prompt.body;
+  function save() {
+    const label = labelRef.current?.value ?? "";
+    const body = bodyRef.current?.value ?? "";
+    const labelChanged = label !== labelRef.current?.defaultValue;
+    const bodyChanged = body !== bodyRef.current?.defaultValue;
+    if (!labelChanged && !bodyChanged) return;
 
-  function onSave() {
-    setFeedback(null);
+    dispatch({ kind: "saving" });
     startTransition(async () => {
       const r = await saveSystemPrompt(prompt.id, {
-        label: label !== prompt.label ? label : undefined,
-        body: body !== prompt.body ? body : undefined,
+        label: labelChanged ? label : undefined,
+        body: bodyChanged ? body : undefined,
       });
       if (r.ok) {
-        setFeedback({ kind: "ok", message: "Saved." });
+        const nowIso = new Date().toISOString();
+        setUpdatedAt(nowIso);
+        // Re-baseline the inputs so isFormDirty stops reporting as
+        // dirty after a clean save. React doesn't update DOM
+        // defaultValue/defaultChecked on re-render.
+        if (labelRef.current) labelRef.current.defaultValue = label;
+        if (bodyRef.current) bodyRef.current.defaultValue = body;
+        dispatch({ kind: "saved", at: Date.now() });
       } else {
-        setFeedback({ kind: "error", message: r.message });
+        dispatch({ kind: "error", msg: r.message });
       }
     });
   }
 
-  function onDiscard() {
-    setLabel(prompt.label);
-    setBody(prompt.body);
-    setFeedback(null);
-  }
+  useAutoSaveForm({ formRef, save, freshnessKey: prompt.updated_at });
 
   return (
     <section className="space-y-4 rounded-sm border border-stone-200 bg-white p-5 shadow-sm">
@@ -54,62 +61,43 @@ export function PromptEditor({
         <p className="mt-0.5 text-xs italic text-cool-gray">{description}</p>
       </header>
 
-      <div>
-        <label className="ehs-eyebrow mb-1.5 block text-cool-gray">
-          Label
-        </label>
-        <input
-          type="text"
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-          spellCheck={false}
-          className="w-full rounded-sm border border-stone-300 bg-white px-3 py-1.5 text-sm focus:border-dark-blue focus:outline-none"
-        />
-      </div>
+      <form
+        ref={formRef}
+        onSubmit={(e) => e.preventDefault()}
+        className="space-y-4"
+      >
+        <div>
+          <label className="ehs-eyebrow mb-1.5 block text-cool-gray">
+            Label
+          </label>
+          <input
+            ref={labelRef}
+            type="text"
+            name="label"
+            defaultValue={prompt.label}
+            spellCheck={false}
+            className="w-full rounded-sm border border-stone-300 bg-white px-3 py-1.5 text-sm focus:border-dark-blue focus:outline-none"
+          />
+        </div>
 
-      <div>
-        <label className="ehs-eyebrow mb-1.5 block text-cool-gray">
-          Prompt body
-        </label>
-        <textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          rows={20}
-          spellCheck={false}
-          className="w-full resize-y rounded-sm border border-stone-300 bg-white px-3 py-2 font-mono text-xs leading-relaxed shadow-inner focus:border-dark-blue focus:outline-none"
-        />
-      </div>
+        <div>
+          <label className="ehs-eyebrow mb-1.5 block text-cool-gray">
+            Prompt body
+          </label>
+          <textarea
+            ref={bodyRef}
+            name="body"
+            defaultValue={prompt.body}
+            rows={20}
+            spellCheck={false}
+            className="w-full resize-y rounded-sm border border-stone-300 bg-white px-3 py-2 font-mono text-xs leading-relaxed shadow-inner focus:border-dark-blue focus:outline-none"
+          />
+        </div>
+      </form>
 
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          onClick={onSave}
-          disabled={!dirty || pending}
-          className="rounded-sm bg-dark-blue px-3 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-dark-blue-dark disabled:cursor-not-allowed disabled:bg-stone-300 disabled:text-stone-500"
-        >
-          {pending ? "Saving…" : "Save"}
-        </button>
-        <button
-          type="button"
-          onClick={onDiscard}
-          disabled={!dirty || pending}
-          className="rounded-sm px-2 py-1 text-sm text-cool-gray hover:bg-stone-100 disabled:opacity-50"
-        >
-          Discard changes
-        </button>
-        {feedback && (
-          <span
-            className={`text-xs ${
-              feedback.kind === "ok" ? "text-emerald-700" : "text-red-700"
-            }`}
-          >
-            {feedback.message}
-          </span>
-        )}
-        <span className="ml-auto text-[11px] italic text-cool-gray">
-          Last edited {formatDate(prompt.updated_at)}
-        </span>
-      </div>
+      <p className="text-[11px] italic text-cool-gray">
+        Last edited {formatDate(updatedAt)}
+      </p>
     </section>
   );
 }

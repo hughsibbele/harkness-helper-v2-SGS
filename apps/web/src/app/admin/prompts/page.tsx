@@ -1,6 +1,7 @@
 import { createAdminDbClient } from "@harkness-helper/db/admin";
 import type { Tables } from "@harkness-helper/db";
 import { PromptEditor } from "./PromptEditor";
+import { AutoSaveProvider } from "@/components/auto-save/context";
 
 type Prompt = Tables<"prompts">;
 
@@ -66,23 +67,25 @@ export default async function AdminPromptsPage() {
         </p>
       </header>
 
-      {PROMPT_ORDER.map(({ purpose, description }) => {
-        const prompt = byPurpose.get(purpose);
-        if (!prompt) {
+      <AutoSaveProvider>
+        {PROMPT_ORDER.map(({ purpose, description }) => {
+          const prompt = byPurpose.get(purpose);
+          if (!prompt) {
+            return (
+              <section
+                key={purpose}
+                className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+              >
+                No default prompt found for <code>{purpose}</code>. The
+                migration may need to be re-run.
+              </section>
+            );
+          }
           return (
-            <section
-              key={purpose}
-              className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
-            >
-              No default prompt found for <code>{purpose}</code>. The
-              migration may need to be re-run.
-            </section>
+            <PromptEditor key={purpose} prompt={prompt} description={description} />
           );
-        }
-        return (
-          <PromptEditor key={purpose} prompt={prompt} description={description} />
-        );
-      })}
+        })}
+      </AutoSaveProvider>
     </div>
   );
 }
