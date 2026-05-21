@@ -5,70 +5,64 @@ import { anonToken } from "@harkness-helper/anonymizer";
 import { createAdminDbClient } from "@harkness-helper/db/admin";
 import { getCurrentTeacher } from "@/lib/auth/teacher";
 import { inngest } from "@/lib/inngest/client";
-import type { UploadDiscussionResult } from "./upload-discussion.types";
+import type { FinalizeDiscussionResult } from "./upload-discussion.types";
 
 const BUCKET = "discussion-audio";
 
-function extensionForMime(mime: string): string {
-  if (mime.includes("webm")) return "webm";
-  if (mime.includes("mp4")) return "m4a";
-  if (mime.includes("ogg")) return "ogg";
-  if (mime.includes("mpeg")) return "mp3";
-  if (mime.includes("wav")) return "wav";
-  return "audio";
-}
-
-export async function uploadDiscussion(
-  formData: FormData,
-): Promise<UploadDiscussionResult> {
+export async function finalizeDiscussion(params: {
+  storagePath: string;
+  canvasCourseId: string;
+  canvasAssignmentId: string;
+  canvasSectionId: string | null;
+  participantIds: string[];
+}): Promise<FinalizeDiscussionResult> {
   const teacher = await getCurrentTeacher();
 
-  const audio = formData.get("audio");
-  const canvasCourseId = String(formData.get("canvas_course_id") ?? "").trim();
-  const canvasAssignmentId = String(
-    formData.get("canvas_assignment_id") ?? "",
-  ).trim();
-  const canvasSectionIdRaw = String(
-    formData.get("canvas_section_id") ?? "",
-  ).trim();
-  const canvasSectionId = canvasSectionIdRaw.length > 0 ? canvasSectionIdRaw : null;
-  const participantIds = formData
-    .getAll("participant_id")
+  const canvasCourseId = params.canvasCourseId.trim();
+  const canvasAssignmentId = params.canvasAssignmentId.trim();
+  const canvasSectionId =
+    params.canvasSectionId && params.canvasSectionId.trim().length > 0
+      ? params.canvasSectionId.trim()
+      : null;
+  const storagePath = params.storagePath.trim();
+  const participantIds = params.participantIds
     .map((v) => String(v))
     .filter((v) => v.length > 0);
 
-  if (!(audio instanceof File) || audio.size === 0) {
-    return { ok: false, message: "Recording is empty or missing." };
-  }
   if (!canvasCourseId) return { ok: false, message: "Course is required." };
   if (!canvasAssignmentId) {
     return { ok: false, message: "Assignment is required." };
   }
 
+  // The signed upload URL was issued for a teacher-scoped path. Reject any
+  // storagePath that doesn't start with this teacher's id — defense against
+  // a tampered client trying to claim someone else's upload.
+  if (!storagePath.startsWith(`${teacher.id}/`)) {
+    return { ok: false, message: "storage path does not belong to teacher" };
+  }
+
   const admin = createAdminDbClient();
 
-  // Refuse a duplicate up front instead of orphaning a storage upload.
-  // Composite key: per (assignment, section). NULL section is treated as
-  // distinct from any specific section but only one NULL row per assignment
-  // (NULLS NOT DISTINCT on the constraint).
-  let duplicateQuery = admin
-    .from("discussions")
-    .select("id")
-    .eq("canvas_assignment_id", canvasAssignmentId);
-  duplicateQuery = canvasSectionId
-    ? duplicateQuery.eq("canvas_section_id", canvasSectionId)
-    : duplicateQuery.is("canvas_section_id", null);
-  const { data: existing } = await duplicateQuery.maybeSingle();
-  if (existing) {
+  // Confirm the upload actually landed in storage before we create the row.
+  // list() on the parent prefix with the filename filter is cheap and
+  // doesn't require additional permissions vs reading the object.
+  const lastSlash = storagePath.lastIndexOf("/");
+  const prefix = storagePath.slice(0, lastSlash);
+  const filename = storagePath.slice(lastSlash + 1);
+  const { data: existing, error: listErr } = await admin.storage
+    .from(BUCKET)
+    .list(prefix, { search: filename });
+  if (listErr) {
+    return { ok: false, message: `storage check: ${listErr.message}` };
+  }
+  const uploaded = existing?.find((o) => o.name === filename);
+  if (!uploaded) {
     return {
       ok: false,
-      message: canvasSectionId
-        ? "A recording is already linked to this assignment + section. Delete the existing discussion first to re-upload."
-        : "A recording without a section is already linked to this assignment. Delete it first to re-upload.",
+      message: "audio file was not found at the prepared storage path",
     };
   }
 
-  // Pull roster so we can hydrate students rows for the chosen participants.
   const { data: rosterRow, error: rosterErr } = await admin
     .from("course_rosters")
     .select("students")
@@ -84,24 +78,6 @@ export async function uploadDiscussion(
       : [];
   const rosterById = new Map(roster.map((s) => [s.canvas_user_id, s]));
 
-  // Storage: deterministic path keyed on canvas_assignment_id (unique → one
-  // recording per assignment). Upload first so we have a stable audio_url
-  // before inserting the discussion row.
-  const ext = extensionForMime(audio.type);
-  const sectionSlug = canvasSectionId ?? "no-section";
-  const storagePath = `${teacher.id}/${canvasAssignmentId}/${sectionSlug}/recording.${ext}`;
-  const { error: uploadErr } = await admin.storage
-    .from(BUCKET)
-    .upload(storagePath, audio, {
-      contentType: audio.type || "application/octet-stream",
-      upsert: true,
-    });
-  if (uploadErr) {
-    return { ok: false, message: `storage upload: ${uploadErr.message}` };
-  }
-
-  // Insert the discussion row. audio_url stores the storage path; signed
-  // URLs are generated on demand at playback / transcription time.
   const today = new Date().toISOString().slice(0, 10);
   const { data: discussion, error: discussionErr } = await admin
     .from("discussions")
@@ -117,8 +93,8 @@ export async function uploadDiscussion(
     .select("id")
     .single();
   if (discussionErr || !discussion) {
-    // Best-effort cleanup of the orphan file.
-    await admin.storage.from(BUCKET).remove([storagePath]).catch(() => {});
+    // The unique constraint may have raced with another upload; leave the
+    // orphan blob in place — retention sweep handles it.
     return {
       ok: false,
       message: `discussion insert: ${discussionErr?.message ?? "unknown error"}`,
@@ -126,8 +102,6 @@ export async function uploadDiscussion(
   }
   const discussionId = discussion.id;
 
-  // Upsert students rows for the picked participants (each carries the
-  // canonical anon_token computed via the shared anonymizer).
   if (participantIds.length > 0) {
     const studentRows = participantIds
       .map((cuid) => {
@@ -175,10 +149,6 @@ export async function uploadDiscussion(
     }
   }
 
-  // Kick off the transcription pipeline. Fire-and-forget — if Inngest is
-  // misconfigured locally (no `inngest-cli dev` running), the discussion
-  // still lands and the event is dropped at the edge. Production has the
-  // INNGEST_EVENT_KEY env var and the cloud endpoint.
   try {
     await inngest.send({
       name: "discussion.uploaded",
