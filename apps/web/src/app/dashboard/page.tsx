@@ -1,6 +1,7 @@
 import { createAdminDbClient } from "@harkness-helper/db/admin";
 import { getCurrentTeacher } from "@/lib/auth/teacher";
 import { getServerDbClient } from "@/lib/supabase/server";
+import { bulkSuperGraderScope } from "@/lib/super-grader/scope";
 import { CanvasSyncButton } from "./CanvasSyncButton";
 import { DiscussionList, type DiscussionListRow } from "./DiscussionList";
 import { RecordingFlow } from "./RecordingFlow";
@@ -125,6 +126,18 @@ export default async function DashboardPage() {
     has_summary: !!d.summary && d.summary.length > 0,
   }));
 
+  // Ask super-grader which assignments it's tracking — for the indicator
+  // badge on each discussion row. HH doesn't post to Canvas, so this is
+  // informational only: the badge tells the teacher SG will collect this
+  // discussion's transcript + summary alongside the essay grading flow.
+  const sgScopeMap = await bulkSuperGraderScope(
+    discussions.map((d) => d.canvas_assignment_id),
+  );
+  const superGraderScopeByAssignmentId: Record<string, boolean> = {};
+  for (const [id, scope] of sgScopeMap.entries()) {
+    superGraderScopeByAssignmentId[id] = scope.in_scope;
+  }
+
   return (
     <div className="mx-auto max-w-5xl space-y-6">
       <header>
@@ -146,6 +159,7 @@ export default async function DashboardPage() {
           courseLabelById={courseLabelById}
           assignmentLabelById={assignmentLabelById}
           sectionLabelById={sectionLabelById}
+          superGraderScopeByAssignmentId={superGraderScopeByAssignmentId}
         />
       </section>
 

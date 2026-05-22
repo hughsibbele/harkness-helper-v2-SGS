@@ -43,11 +43,15 @@ export function DiscussionList({
   courseLabelById,
   assignmentLabelById,
   sectionLabelById,
+  superGraderScopeByAssignmentId,
 }: {
   discussions: DiscussionListRow[];
   courseLabelById: Record<string, string>;
   assignmentLabelById: Record<string, string>;
   sectionLabelById: Record<string, string>;
+  /** Map of canvas_assignment_id → true when super-grader is tracking that
+   *  assignment. Informational badge only — HH doesn't post to Canvas. */
+  superGraderScopeByAssignmentId?: Record<string, boolean>;
 }) {
   const router = useRouter();
   const [courseFilter, setCourseFilter] = useState<string | null>(null);
@@ -158,6 +162,14 @@ export function DiscussionList({
                 <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-sm">
                   <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
                     <span className="font-medium text-ink">{assignmentLabel}</span>
+                    {superGraderScopeByAssignmentId?.[d.canvas_assignment_id] && (
+                      <span
+                        className="rounded-full bg-[#7a1e46] px-2 py-0.5 text-[10px] font-medium text-white"
+                        title="This assignment is tracked in super-grader. HH ships the transcript + summary to SG via the existing webhook."
+                      >
+                        ↗ super-grader
+                      </span>
+                    )}
                     <span className="text-xs text-cool-gray">{courseLabel}</span>
                     {sectionLabel && (
                       <>
