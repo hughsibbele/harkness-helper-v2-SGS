@@ -1,13 +1,78 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { anonToken } from "@harkness-helper/anonymizer";
+import {
+  anonToken,
+  RosterMissingError,
+  type AnonymizableStudent,
+} from "@harkness-helper/anonymizer";
 import { createAdminDbClient } from "@harkness-helper/db/admin";
+import type { Json } from "@harkness-helper/db";
 import { getCurrentTeacher } from "@/lib/auth/teacher";
 import { inngest } from "@/lib/inngest/client";
 import type { FinalizeDiscussionResult } from "./upload-discussion.types";
 
 const BUCKET = "discussion-audio";
+
+type RosterRowStudent = {
+  canvas_user_id: string;
+  name: string;
+  email: string | null;
+};
+
+/**
+ * Load the course-roster JSONB snapshot for (teacher, course) and reduce to
+ * the email-bearing AnonymizableStudent list the scrubber consumes. Throws
+ * `RosterMissingError` (fail-closed per M6.22 Phase 0) when the row is
+ * missing OR every entry lacks an email — refusing to proceed with a
+ * partial roster that would silently leave names unscrubbed.
+ */
+async function loadRosterSnapshot(
+  admin: ReturnType<typeof createAdminDbClient>,
+  teacherId: string,
+  canvasCourseId: string,
+): Promise<AnonymizableStudent[]> {
+  const { data: rosterRow, error: rosterErr } = await admin
+    .from("course_rosters")
+    .select("students")
+    .eq("teacher_id", teacherId)
+    .eq("canvas_course_id", canvasCourseId)
+    .maybeSingle();
+  if (rosterErr) throw new Error(`roster lookup: ${rosterErr.message}`);
+  if (!rosterRow) {
+    throw new RosterMissingError(
+      "missing_row",
+      `No course_rosters row for course ${canvasCourseId}. Sync the roster from Canvas first.`,
+    );
+  }
+  const rosterStudents = Array.isArray(rosterRow.students)
+    ? (rosterRow.students as RosterRowStudent[])
+    : [];
+  if (rosterStudents.length === 0) {
+    throw new RosterMissingError(
+      "empty_students",
+      `course_rosters row for course ${canvasCourseId} has no students. Re-sync from Canvas.`,
+    );
+  }
+  const roster: AnonymizableStudent[] = rosterStudents
+    .filter(
+      (s): s is RosterRowStudent & { email: string } =>
+        typeof s.email === "string" && s.email.trim().length > 0,
+    )
+    .map((s) => ({
+      canvas_user_id: s.canvas_user_id,
+      name: s.name,
+      email: s.email,
+    }));
+  if (roster.length === 0) {
+    throw new RosterMissingError(
+      "no_email_students",
+      `course_rosters row for course ${canvasCourseId} has ${rosterStudents.length} students but none have an email. ` +
+        "Canvas may be hiding emails — re-sync with a token that has student-email read scope.",
+    );
+  }
+  return roster;
+}
 
 export async function finalizeDiscussion(params: {
   storagePath: string;
@@ -44,8 +109,6 @@ export async function finalizeDiscussion(params: {
   const admin = createAdminDbClient();
 
   // Confirm the upload actually landed in storage before we create the row.
-  // list() on the parent prefix with the filename filter is cheap and
-  // doesn't require additional permissions vs reading the object.
   const lastSlash = storagePath.lastIndexOf("/");
   const prefix = storagePath.slice(0, lastSlash);
   const filename = storagePath.slice(lastSlash + 1);
@@ -63,19 +126,25 @@ export async function finalizeDiscussion(params: {
     };
   }
 
-  const { data: rosterRow, error: rosterErr } = await admin
-    .from("course_rosters")
-    .select("students")
-    .eq("teacher_id", teacher.id)
-    .eq("canvas_course_id", canvasCourseId)
-    .maybeSingle();
-  if (rosterErr) {
-    return { ok: false, message: `roster lookup: ${rosterErr.message}` };
+  // Fail-closed roster fetch. If the roster is missing/empty/has no emails,
+  // refuse to create the discussion row at all — the Inngest worker would
+  // otherwise scrub against an empty roster and write Gemini output
+  // verbatim. M6.22 Phase 0.
+  let roster: AnonymizableStudent[];
+  try {
+    roster = await loadRosterSnapshot(admin, teacher.id, canvasCourseId);
+  } catch (err) {
+    if (err instanceof RosterMissingError) {
+      return {
+        ok: false,
+        message: `Cannot record this discussion: ${err.message}`,
+      };
+    }
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : String(err),
+    };
   }
-  const roster: { canvas_user_id: string; name: string; email: string | null }[] =
-    Array.isArray(rosterRow?.students)
-      ? (rosterRow.students as { canvas_user_id: string; name: string; email: string | null }[])
-      : [];
   const rosterById = new Map(roster.map((s) => [s.canvas_user_id, s]));
 
   const today = new Date().toISOString().slice(0, 10);
@@ -89,6 +158,8 @@ export async function finalizeDiscussion(params: {
       recorded_at: today,
       audio_url: storagePath,
       state: "uploaded",
+      roster_snapshot: roster as unknown as Json,
+      scrub_status: "ok",
     })
     .select("id")
     .single();

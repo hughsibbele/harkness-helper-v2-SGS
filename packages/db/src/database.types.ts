@@ -189,6 +189,8 @@ export type Database = {
           super_grader_post_status: "pending" | "posted" | "error";
           super_grader_response: Json | null;
           error_message: string | null;
+          roster_snapshot: Json | null;
+          scrub_status: "ok" | "roster_missing" | "failed" | "skipped";
           created_at: string;
           updated_at: string;
         };
@@ -208,6 +210,8 @@ export type Database = {
           super_grader_post_status?: "pending" | "posted" | "error";
           super_grader_response?: Json | null;
           error_message?: string | null;
+          roster_snapshot?: Json | null;
+          scrub_status?: "ok" | "roster_missing" | "failed" | "skipped";
           created_at?: string;
           updated_at?: string;
         };
@@ -227,6 +231,8 @@ export type Database = {
           super_grader_post_status?: "pending" | "posted" | "error";
           super_grader_response?: Json | null;
           error_message?: string | null;
+          roster_snapshot?: Json | null;
+          scrub_status?: "ok" | "roster_missing" | "failed" | "skipped";
           created_at?: string;
           updated_at?: string;
         };

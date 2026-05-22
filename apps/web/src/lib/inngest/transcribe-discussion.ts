@@ -9,9 +9,22 @@
 // If transcript saves but summary fails, the row keeps the transcript and
 // gets state='failed' with an error_message. The Save-to-Drive UI still
 // works for the transcript in that case.
+//
+// M6.22 Phase 0 — Roster scrub is fail-closed. The worker reads the
+// `roster_snapshot` JSONB column populated at finalizeDiscussion time,
+// falling back to live `course_rosters` ONLY for legacy rows
+// (scrub_status='skipped'). If neither yields a non-empty roster, the
+// worker refuses to call Gemini and marks the row state='failed' /
+// scrub_status='roster_missing'. Closes pii-scrub-audit Findings 1, 2, 8.
 
 import { GoogleGenAI } from "@google/genai";
-import { scrubText, type AnonymizableStudent } from "@harkness-helper/anonymizer";
+import {
+  compileRoster,
+  RosterMissingError,
+  scrubFreeText,
+  type AnonymizableStudent,
+  type CompiledRoster,
+} from "@harkness-helper/anonymizer";
 import { createAdminDbClient } from "@harkness-helper/db/admin";
 import {
   getActiveSummaryPrompt,
@@ -26,7 +39,7 @@ const FILES_API_POLL_INTERVAL_MS = 2000;
 const FILES_API_POLL_TIMEOUT_MS = 5 * 60 * 1000;
 const GEMINI_MODEL = "gemini-2.5-flash";
 
-type RosterStudent = {
+type SnapshotRosterStudent = {
   canvas_user_id: string;
   name: string;
   email: string | null;
@@ -46,6 +59,22 @@ function fillTemplate(
   return out;
 }
 
+function normalizeRoster(
+  raw: unknown,
+): AnonymizableStudent[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as SnapshotRosterStudent[])
+    .filter(
+      (s): s is SnapshotRosterStudent & { email: string } =>
+        typeof s?.email === "string" && s.email.trim().length > 0,
+    )
+    .map((s) => ({
+      canvas_user_id: s.canvas_user_id,
+      name: s.name,
+      email: s.email,
+    }));
+}
+
 export const transcribeDiscussion = inngest.createFunction(
   {
     id: "transcribe-discussion",
@@ -57,11 +86,14 @@ export const transcribeDiscussion = inngest.createFunction(
       const discussionId = orig?.data?.discussionId;
       if (!discussionId) return;
       const admin = createAdminDbClient();
+      const message = String(error?.message ?? error ?? "unknown");
+      const rosterMissing = message.startsWith("RosterMissingError:");
       await admin
         .from("discussions")
         .update({
           state: "failed",
-          error_message: String(error?.message ?? error ?? "unknown").slice(0, 1000),
+          error_message: message.slice(0, 1000),
+          scrub_status: rosterMissing ? "roster_missing" : "failed",
         })
         .eq("id", discussionId);
     },
@@ -117,30 +149,46 @@ export const transcribeDiscussion = inngest.createFunction(
       if (error) throw new Error(`mark transcribing: ${error.message}`);
     });
 
+    // Load both prompts and the roster as durable JSON. The compiled
+    // (RegExp-bearing) scrubber is rebuilt OUTSIDE the step from the
+    // durable roster array, since RegExp cannot round-trip through
+    // step.run's JSON serialization layer.
+    //
+    // Roster comes from the `roster_snapshot` column populated at finalize
+    // time. For legacy rows (pre-Phase-0, marked scrub_status='skipped')
+    // we fall back to a live read against course_rosters. Either way we
+    // throw RosterMissingError when no usable roster is available — the
+    // onFailure handler catches and marks scrub_status='roster_missing'.
     const ctx = await step.run("load-prompts-and-roster", async () => {
       const [transcriptionPrompt, summaryPrompt] = await Promise.all([
         getActiveTranscriptionPrompt(),
         getActiveSummaryPrompt(),
       ]);
-      const { data: rosterRow, error: rosterErr } = await admin
-        .from("course_rosters")
-        .select("students")
-        .eq("teacher_id", discussion.teacher_id)
-        .eq("canvas_course_id", discussion.canvas_course_id)
-        .maybeSingle();
-      if (rosterErr) throw new Error(`roster lookup: ${rosterErr.message}`);
-      const rosterStudents: RosterStudent[] = Array.isArray(rosterRow?.students)
-        ? (rosterRow.students as RosterStudent[])
-        : [];
-      const roster: AnonymizableStudent[] = rosterStudents
-        .filter((s): s is RosterStudent & { email: string } =>
-          typeof s.email === "string" && s.email.length > 0,
-        )
-        .map((s) => ({
-          canvas_user_id: s.canvas_user_id,
-          name: s.name,
-          email: s.email,
-        }));
+
+      let roster = normalizeRoster(discussion.roster_snapshot);
+
+      if (roster.length === 0 && discussion.scrub_status === "skipped") {
+        // Legacy row predates the snapshot column — read live as a fallback.
+        const { data: rosterRow, error: rosterErr } = await admin
+          .from("course_rosters")
+          .select("students")
+          .eq("teacher_id", discussion.teacher_id)
+          .eq("canvas_course_id", discussion.canvas_course_id)
+          .maybeSingle();
+        if (rosterErr) throw new Error(`roster lookup: ${rosterErr.message}`);
+        roster = normalizeRoster(rosterRow?.students);
+      }
+
+      if (roster.length === 0) {
+        throw new RosterMissingError(
+          discussion.roster_snapshot ? "no_email_students" : "missing_row",
+          discussion.roster_snapshot
+            ? `roster_snapshot has no email-bearing students for discussion ${discussionId}`
+            : `no roster_snapshot and no course_rosters row for discussion ${discussionId} ` +
+              `(teacher=${discussion.teacher_id}, course=${discussion.canvas_course_id})`,
+        );
+      }
+
       return {
         transcriptionPromptId: transcriptionPrompt.id,
         transcriptionPromptBody: transcriptionPrompt.body,
@@ -149,6 +197,10 @@ export const transcribeDiscussion = inngest.createFunction(
         roster,
       };
     });
+
+    // Compile the scrubber from the durable roster JSON. Cheap, deterministic,
+    // and reruns harmlessly on every Inngest replay.
+    const compiled: CompiledRoster = compileRoster(ctx.roster);
 
     // Pass 1: verbatim transcript from audio.
     const rawTranscript = await step.run("gemini-transcribe", async () => {
@@ -209,9 +261,9 @@ export const transcribeDiscussion = inngest.createFunction(
       return text;
     });
 
-    const scrubbedTranscript = await step.run("scrub-transcript", async () => {
-      return scrubText(rawTranscript, ctx.roster);
-    });
+    const scrubbedTranscript = await step.run("scrub-transcript", () =>
+      scrubFreeText(rawTranscript, compiled),
+    );
 
     // Save transcript before attempting summary — that way a summary failure
     // doesn't lose the transcript work.
@@ -226,10 +278,11 @@ export const transcribeDiscussion = inngest.createFunction(
       if (error) throw new Error(`save transcript: ${error.message}`);
     });
 
-    // Pass 2: summary (v1's GROUP_FEEDBACK prompt). Text-only Gemini call.
-    // The prompt body contains {grade} and {transcript} placeholders that v1
-    // substitutes server-side; we do the same. {grade} defaults to v1's
-    // "not yet assigned" since grading happens later (in super-grader).
+    // Pass 2: summary (v1's GROUP_FEEDBACK prompt, rewritten in
+    // 20260522120001_rewrite_summary_prompt.sql to instruct Gemini to use
+    // anonymized tokens — never real names). Receives the already-scrubbed
+    // transcript so even if Pass 2 tried to surface a real name, the input
+    // doesn't carry one.
     const rawSummary = await step.run("gemini-summarize", async () => {
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
@@ -249,12 +302,11 @@ export const transcribeDiscussion = inngest.createFunction(
       return text;
     });
 
-    const scrubbedSummary = await step.run("scrub-summary", async () => {
-      // Defense-in-depth: the transcript was already scrubbed before going
-      // into the summary call, but re-run the roster scrub against the output
-      // in case the summary phrasing re-introduced any names somehow.
-      return scrubText(rawSummary, ctx.roster);
-    });
+    const scrubbedSummary = await step.run("scrub-summary", () =>
+      // Defense-in-depth: Pass 2's input was already scrubbed but a model
+      // can still hallucinate a name (or partially obey).
+      scrubFreeText(rawSummary, compiled),
+    );
 
     await step.run("save-summary", async () => {
       const { error } = await admin

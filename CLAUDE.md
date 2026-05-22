@@ -87,10 +87,11 @@ via `googleapis` SDK when within 5min of expiry.
 
 - Project: `harkness-helper-v2` — ref `zypdhubfmbhcwarjljlp` (us-east-1)
 - Dashboard: <https://supabase.com/dashboard/project/zypdhubfmbhcwarjljlp>
-- 10 migrations: `initial_schema`, `admins_and_prompts`, `canvas_cache`,
+- 12 migrations: `initial_schema`, `admins_and_prompts`, `canvas_cache`,
   `gemini_rate_limits`, `discussion_audio_bucket`, `course_roster_sections`,
   `discussion_per_section`, `teacher_google_tokens`,
-  `two_pass_transcript_summary`, `v1_prompts`.
+  `two_pass_transcript_summary`, `v1_prompts`, `discussion_roster_snapshot`
+  (M6.22 Phase 0), `rewrite_summary_prompt` (M6.22 Phase 0).
 - `discussions` composite unique on (canvas_assignment_id, canvas_section_id)
   NULLS NOT DISTINCT so two sections of the same Canvas assignment can each
   have a recording.
