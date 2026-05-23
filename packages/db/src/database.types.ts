@@ -29,6 +29,8 @@ export type Database = {
           last_canvas_sync_at: string | null;
           google_access_token: string | null;
           google_refresh_token: string | null;
+          google_access_token_encrypted: string | null;
+          google_refresh_token_encrypted: string | null;
           google_token_expires_at: string | null;
           created_at: string;
           updated_at: string;
@@ -43,6 +45,8 @@ export type Database = {
           last_canvas_sync_at?: string | null;
           google_access_token?: string | null;
           google_refresh_token?: string | null;
+          google_access_token_encrypted?: string | null;
+          google_refresh_token_encrypted?: string | null;
           google_token_expires_at?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -57,6 +61,8 @@ export type Database = {
           last_canvas_sync_at?: string | null;
           google_access_token?: string | null;
           google_refresh_token?: string | null;
+          google_access_token_encrypted?: string | null;
+          google_refresh_token_encrypted?: string | null;
           google_token_expires_at?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -185,7 +191,7 @@ export type Database = {
           summary: string | null;
           transcription_prompt_id: string | null;
           summary_prompt_id: string | null;
-          state: "uploaded" | "transcribing" | "transcribed" | "posted_to_super_grader" | "failed";
+          state: "uploaded" | "transcribing" | "transcribed" | "posted_to_super_grader" | "failed" | "archived";
           super_grader_post_status: "pending" | "posted" | "error";
           super_grader_response: Json | null;
           error_message: string | null;
@@ -206,7 +212,7 @@ export type Database = {
           summary?: string | null;
           transcription_prompt_id?: string | null;
           summary_prompt_id?: string | null;
-          state?: "uploaded" | "transcribing" | "transcribed" | "posted_to_super_grader" | "failed";
+          state?: "uploaded" | "transcribing" | "transcribed" | "posted_to_super_grader" | "failed" | "archived";
           super_grader_post_status?: "pending" | "posted" | "error";
           super_grader_response?: Json | null;
           error_message?: string | null;
@@ -227,7 +233,7 @@ export type Database = {
           summary?: string | null;
           transcription_prompt_id?: string | null;
           summary_prompt_id?: string | null;
-          state?: "uploaded" | "transcribing" | "transcribed" | "posted_to_super_grader" | "failed";
+          state?: "uploaded" | "transcribing" | "transcribed" | "posted_to_super_grader" | "failed" | "archived";
           super_grader_post_status?: "pending" | "posted" | "error";
           super_grader_response?: Json | null;
           error_message?: string | null;
@@ -366,6 +372,30 @@ export type Database = {
           updated_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["gemini_usage_daily"]["Insert"]>;
+        Relationships: [];
+      };
+      retention_audits: {
+        Row: {
+          id: string;
+          started_at: string;
+          completed_at: string | null;
+          archived_count: number;
+          deleted_count: number;
+          storage_objects_deleted: number;
+          error: string | null;
+          triggered_by: "cron" | "admin_manual";
+        };
+        Insert: {
+          id?: string;
+          started_at?: string;
+          completed_at?: string | null;
+          archived_count?: number;
+          deleted_count?: number;
+          storage_objects_deleted?: number;
+          error?: string | null;
+          triggered_by: "cron" | "admin_manual";
+        };
+        Update: Partial<Database["public"]["Tables"]["retention_audits"]["Insert"]>;
         Relationships: [];
       };
     };

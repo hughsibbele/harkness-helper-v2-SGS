@@ -18,6 +18,11 @@ export default function AdminHome() {
           description="Edit the system prompts the pipeline uses at each stage — transcription, group feedback summary, speaker identification, individual feedback. Changes propagate to the next discussion processed."
         />
         <Tile
+          href="/admin/retention"
+          title="Retention"
+          description="Automated daily sweep that archives stuck uploads and hard-deletes discussions past the retention window. Check that the cron is firing and trigger an out-of-band sweep."
+        />
+        <Tile
           href="/admin/admins"
           title="Admins"
           description="Grant or revoke admin access. The last active admin can't be revoked."

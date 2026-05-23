@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminDbClient } from "@harkness-helper/db/admin";
+import { encryptSecret } from "@/lib/crypto/secret";
 import { getServerDbClient } from "@/lib/supabase/server";
 
 const ALLOWED_DOMAIN = "episcopalhighschool.org";
@@ -63,15 +64,25 @@ export async function GET(request: NextRequest) {
 
   try {
     const admin = createAdminDbClient();
-    const tokenUpdates: Record<string, string> = {};
+    // M6.22 Phase 0b — Google tokens are encrypted at rest with
+    // TEACHER_GTOKEN_ENC_KEY. Write only to the encrypted columns and
+    // explicitly null the plaintext columns on every write so a returning
+    // teacher's row converges to encrypted-only automatically. If the env
+    // var isn't set, `encryptSecret` throws and the callback fails loudly
+    // (correct posture — silent fallback to plaintext would re-open the
+    // leak the migration closes).
+    const tokenUpdates: Record<string, string | null> = {};
     if (providerToken) {
-      tokenUpdates.google_access_token = providerToken;
+      tokenUpdates.google_access_token_encrypted = encryptSecret(providerToken);
+      tokenUpdates.google_access_token = null;
     }
     if (tokenExpiresAt) {
       tokenUpdates.google_token_expires_at = tokenExpiresAt;
     }
     if (providerRefreshToken) {
-      tokenUpdates.google_refresh_token = providerRefreshToken;
+      tokenUpdates.google_refresh_token_encrypted =
+        encryptSecret(providerRefreshToken);
+      tokenUpdates.google_refresh_token = null;
     }
     const { error: upsertError } = await admin
       .from("teachers")

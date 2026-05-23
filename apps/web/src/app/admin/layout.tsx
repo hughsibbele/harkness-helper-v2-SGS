@@ -24,6 +24,12 @@ export default async function AdminLayout({
         Prompts
       </Link>
       <Link
+        href="/admin/retention"
+        className="text-ink transition-colors hover:text-dark-blue"
+      >
+        Retention
+      </Link>
+      <Link
         href="/admin/admins"
         className="text-ink transition-colors hover:text-dark-blue"
       >

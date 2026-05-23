@@ -12,7 +12,8 @@ export type DiscussionState =
   | "transcribing"
   | "transcribed"
   | "posted_to_super_grader"
-  | "failed";
+  | "failed"
+  | "archived";
 
 export type DiscussionListRow = {
   id: string;
@@ -36,6 +37,7 @@ const STATE_STYLES: Record<DiscussionState, { dot: string; label: string }> = {
     label: "Posted to super-grader",
   },
   failed: { dot: "bg-red-600", label: "Failed" },
+  archived: { dot: "bg-stone-400", label: "Archived" },
 };
 
 export function DiscussionList({
