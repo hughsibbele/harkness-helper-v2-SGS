@@ -1,6 +1,7 @@
 import { getCurrentTeacher } from "@/lib/auth/teacher";
 import { isAdmin } from "@/lib/auth/admin";
 import { TestCanvasButton } from "./TestCanvasButton";
+import { CanvasCommentToggle } from "./CanvasCommentToggle";
 
 export default async function SetupPage() {
   const teacher = await getCurrentTeacher();
@@ -9,9 +10,16 @@ export default async function SetupPage() {
   const canvasHost = process.env.CANVAS_BASE_URL ?? "(not set)";
   const canvasTokenPresent = Boolean(process.env.CANVAS_API_TOKEN);
 
+  // M7.2 — Drive-connected check post-M6.22 Phase 0b: tokens land in
+  // *_encrypted columns; the plaintext columns are nulled. Read both
+  // shapes so legacy + post-encryption teachers both show as connected.
   const driveConnected = Boolean(
-    teacher.google_access_token && teacher.google_refresh_token,
+    (teacher.google_access_token_encrypted ?? teacher.google_access_token) &&
+      (teacher.google_refresh_token_encrypted ?? teacher.google_refresh_token),
   );
+  const driveFolderUrl = teacher.drive_folder_id
+    ? `https://drive.google.com/drive/folders/${teacher.drive_folder_id}`
+    : null;
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -79,8 +87,10 @@ export default async function SetupPage() {
         <h2 className="mb-2 text-sm font-semibold text-ink">Google Drive</h2>
         <p className="mb-3 text-xs text-cool-gray">
           Per-teacher OAuth. Drive scopes are requested when you sign in
-          with Google. Used by the &ldquo;Save to Drive&rdquo; menu on each
-          discussion row.
+          with Google. Each transcribed discussion auto-creates a Google
+          Doc + audio file in a per-teacher{" "}
+          <strong>Harkness Helper</strong> folder; the manual &ldquo;Save
+          to Drive&rdquo; menu on each row is still available.
         </p>
 
         <dl className="mb-3 grid grid-cols-[8rem_1fr] gap-y-1 text-xs">
@@ -97,15 +107,36 @@ export default async function SetupPage() {
               </span>
             )}
           </dd>
-          {driveConnected && teacher.google_token_expires_at && (
+          {driveConnected && (
             <>
-              <dt className="text-cool-gray">Access token expires</dt>
-              <dd className="text-stone-700">
-                {new Date(teacher.google_token_expires_at).toLocaleString()}{" "}
-                <span className="text-cool-gray">
-                  (auto-refreshed when within 5 min of expiry)
-                </span>
+              <dt className="text-cool-gray">App folder</dt>
+              <dd>
+                {driveFolderUrl ? (
+                  <a
+                    href={driveFolderUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-dark-blue hover:underline"
+                  >
+                    Open &ldquo;Harkness Helper&rdquo; in Drive ↗
+                  </a>
+                ) : (
+                  <span className="italic text-cool-gray">
+                    Auto-created on your first transcribed discussion.
+                  </span>
+                )}
               </dd>
+              {teacher.google_token_expires_at && (
+                <>
+                  <dt className="text-cool-gray">Access token expires</dt>
+                  <dd className="text-stone-700">
+                    {new Date(teacher.google_token_expires_at).toLocaleString()}{" "}
+                    <span className="text-cool-gray">
+                      (auto-refreshed when within 5 min of expiry)
+                    </span>
+                  </dd>
+                </>
+              )}
             </>
           )}
         </dl>
@@ -120,6 +151,22 @@ export default async function SetupPage() {
             </button>
           </form>
         )}
+      </section>
+
+      {/* Canvas posting */}
+      <section className="rounded-md border border-stone-200 bg-white p-5 text-sm">
+        <h2 className="mb-2 text-sm font-semibold text-ink">
+          Canvas posting
+        </h2>
+        <p className="mb-3 text-xs text-cool-gray">
+          When a discussion finishes transcribing, Harkness Helper can
+          optionally post a draft comment to each participant&rsquo;s
+          Canvas submission carrying the Drive doc link. Drafts are only
+          visible to you in SpeedGrader until you publish them.
+        </p>
+        <CanvasCommentToggle
+          initialEnabled={teacher.canvas_comment_enabled}
+        />
       </section>
     </div>
   );
