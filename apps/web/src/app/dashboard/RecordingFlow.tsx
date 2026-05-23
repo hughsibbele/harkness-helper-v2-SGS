@@ -1,10 +1,20 @@
 "use client";
 
-import { useCallback, useState, useTransition } from "react";
+import { useCallback, useEffect, useState, useTransition } from "react";
 import { prepareDiscussionUpload } from "@/lib/actions/prepare-discussion-upload";
 import { finalizeDiscussion } from "@/lib/actions/upload-discussion";
 import type { FinalizeDiscussionResult } from "@/lib/actions/upload-discussion.types";
-import { Recorder, type RecordedAudio } from "./Recorder";
+import {
+  clearSession,
+  listOrphanSessions,
+  reconstructSession,
+  type PersistedSession,
+} from "@/lib/recorder/persistence";
+import {
+  Recorder,
+  type RecordedAudio,
+  type RecoveredRecording,
+} from "./Recorder";
 import {
   TargetPicker,
   type AssignmentOption,
@@ -37,10 +47,52 @@ export function RecordingFlow({
   );
   const [pending, startTransition] = useTransition();
 
+  // M6.22 Phase 3b — crash-recovery state machine.
+  // Mount-time: scan IDB for orphan sessions (recordings that started
+  // but never reached "successful upload → clearSession"). If any exist,
+  // surface the most recent one as a recovery candidate. The teacher
+  // either reconstitutes it into the Recorder (Recover) or discards
+  // (clears the IDB rows).
+  const [orphans, setOrphans] = useState<PersistedSession[]>([]);
+  const [recovered, setRecovered] = useState<RecoveredRecording | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const found = await listOrphanSessions();
+      if (!cancelled) setOrphans(found);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const handleTargetChange = useCallback(
     (s: TargetSelection) => setTarget(s),
     [],
   );
+
+  async function handleRecover(session_id: string) {
+    const reconstructed = await reconstructSession(session_id);
+    if (!reconstructed) {
+      // The IDB rows vanished between the listOrphans call and now —
+      // pretend nothing happened.
+      setOrphans((prev) => prev.filter((s) => s.session_id !== session_id));
+      return;
+    }
+    setRecovered({
+      blob: reconstructed.blob,
+      mimeType: reconstructed.mime_type,
+      sessionId: session_id,
+    });
+    setOrphans((prev) => prev.filter((s) => s.session_id !== session_id));
+    setResetCounter((c) => c + 1);
+  }
+
+  async function handleDiscardOrphan(session_id: string) {
+    await clearSession(session_id);
+    setOrphans((prev) => prev.filter((s) => s.session_id !== session_id));
+  }
 
   const canUpload =
     audio !== null && target.course !== null && target.assignment !== null;
@@ -102,7 +154,13 @@ export function RecordingFlow({
       setUploadResult(r);
       setPhase("idle");
       if (r.ok) {
+        // M6.22 Phase 3b — successful finalize → clear the IDB backup.
+        // The bytes are safely in Supabase Storage at this point.
+        if (audio.sessionId) {
+          await clearSession(audio.sessionId);
+        }
         setAudio(null);
+        setRecovered(null);
         setResetCounter((c) => c + 1);
       }
     });
@@ -120,10 +178,19 @@ export function RecordingFlow({
 
   return (
     <div className="space-y-6">
+      {orphans.length > 0 && !recovered && (
+        <RecoveryBanner
+          orphans={orphans}
+          onRecover={handleRecover}
+          onDiscard={handleDiscardOrphan}
+        />
+      )}
+
       <Recorder
         key={`recorder-${resetCounter}`}
         onAudioReady={setAudio}
         onReset={() => setAudio(null)}
+        recovered={recovered}
       />
 
       <section className="rounded-md border border-stone-200 bg-white p-5">
@@ -172,6 +239,58 @@ export function RecordingFlow({
           )}
         </div>
       </section>
+    </div>
+  );
+}
+
+function RecoveryBanner({
+  orphans,
+  onRecover,
+  onDiscard,
+}: {
+  orphans: PersistedSession[];
+  onRecover: (session_id: string) => void;
+  onDiscard: (session_id: string) => void;
+}) {
+  return (
+    <div className="space-y-2 rounded-md border-2 border-amber-300 bg-amber-50 p-4">
+      <h2 className="text-sm font-semibold text-amber-900">
+        We found {orphans.length === 1 ? "an" : ""} unfinished recording
+        {orphans.length === 1 ? "" : "s"} from a previous session
+      </h2>
+      <p className="text-xs text-amber-800">
+        Tab closed or browser crashed before upload. The audio chunks were
+        saved locally — recover to upload them, or discard to clear.
+      </p>
+      <ul className="space-y-2">
+        {orphans.map((o) => (
+          <li
+            key={o.session_id}
+            className="flex flex-wrap items-center justify-between gap-3 rounded-sm border border-amber-200 bg-white px-3 py-2 text-xs"
+          >
+            <span className="text-stone-700">
+              Started {new Date(o.started_at).toLocaleString()} ·{" "}
+              {formatBytes(o.approximate_bytes)} · {o.chunk_count} chunks
+            </span>
+            <span className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => onRecover(o.session_id)}
+                className="rounded-md bg-amber-700 px-3 py-1 font-medium text-white hover:bg-amber-800"
+              >
+                Recover
+              </button>
+              <button
+                type="button"
+                onClick={() => onDiscard(o.session_id)}
+                className="rounded-md border border-stone-300 bg-white px-3 py-1 font-medium text-cool-gray hover:bg-stone-100"
+              >
+                Discard
+              </button>
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

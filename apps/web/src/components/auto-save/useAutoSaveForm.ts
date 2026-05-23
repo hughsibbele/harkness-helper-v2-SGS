@@ -31,6 +31,14 @@ export function isFormDirty(form: HTMLFormElement): boolean {
  * - focus leaves the form (blur saves immediately)
  * - the tab becomes hidden (covers tab close + switch)
  *
+ * M6.22 Phase 3c — single-flight. If a `save()` is already in flight
+ * when a new trigger fires, set a pending flag and re-fire `save()` once
+ * the current call resolves. This prevents two parallel saves racing
+ * each other in the server action — last-write-wins becomes
+ * sequenced-write-wins. The caller's `save` must return a Promise so
+ * we can chain on it; existing callers were already async via
+ * useTransition, so this just makes the contract explicit.
+ *
  * Mirrors the OE pattern (oral-examiner-v2-SGS commit cd69dd8). Set
  * the form to `onSubmit={(e) => e.preventDefault()}` so Enter inside
  * an input doesn't try to submit.
@@ -42,7 +50,7 @@ export function useAutoSaveForm({
   freshnessKey,
 }: {
   formRef: React.RefObject<HTMLFormElement | null>;
-  save: () => void;
+  save: () => Promise<void> | void;
   debounceMs?: number;
   freshnessKey: string;
 }) {
@@ -55,14 +63,40 @@ export function useAutoSaveForm({
     const form = formRef.current;
     if (!form) return;
     let timer: number | null = null;
+    let inFlight: Promise<void> | null = null;
+    let pendingAfter = false;
+
+    async function runSave(): Promise<void> {
+      if (!isFormDirty(form!)) return;
+      if (inFlight) {
+        // M6.22 Phase 3c — coalesce overlapping triggers. Whatever
+        // edit happens between now and the in-flight resolution will
+        // be picked up by exactly one follow-up call.
+        pendingAfter = true;
+        return;
+      }
+      const p = Promise.resolve(saveRef.current());
+      inFlight = p.finally(() => {
+        inFlight = null;
+        if (pendingAfter) {
+          pendingAfter = false;
+          // re-fire on next microtask so any state updates from the
+          // previous save (re-baselining defaultValues etc.) commit
+          // before isFormDirty is consulted again.
+          void Promise.resolve().then(() => {
+            if (isFormDirty(form!)) void runSave();
+          });
+        }
+      });
+      await p;
+    }
 
     function fire() {
       if (timer !== null) {
         window.clearTimeout(timer);
         timer = null;
       }
-      if (!isFormDirty(form!)) return;
-      saveRef.current();
+      void runSave();
     }
 
     function onInput() {

@@ -1,6 +1,49 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+// M6.22 Phase 3a — sessionStorage key for picker participant selection.
+// Keyed by (canvas_course_id, canvas_section_id) so a teacher can switch
+// between sections without losing their de-selections in either.
+const PARTICIPANT_STORAGE_PREFIX = "hh.picker.participants:";
+
+function storageKey(courseId: string, sectionId: string | null): string {
+  return `${PARTICIPANT_STORAGE_PREFIX}${courseId}:${sectionId ?? "all"}`;
+}
+
+function loadPersistedParticipants(
+  courseId: string,
+  sectionId: string | null,
+): Set<string> | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(storageKey(courseId, sectionId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    return new Set(parsed.filter((v): v is string => typeof v === "string"));
+  } catch {
+    return null;
+  }
+}
+
+function persistParticipants(
+  courseId: string,
+  sectionId: string | null,
+  ids: Set<string>,
+): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(
+      storageKey(courseId, sectionId),
+      JSON.stringify([...ids]),
+    );
+  } catch {
+    // sessionStorage is best-effort — quota/Safari-private-mode failures
+    // just mean the picker won't survive a polling refresh, which is
+    // exactly the prior behavior.
+  }
+}
 
 export type CourseOption = {
   canvas_course_id: string;
@@ -67,6 +110,14 @@ export function TargetPicker({
     ? courseRoster.students.filter((s) => s.section_ids.includes(sectionId))
     : courseRoster.students;
 
+  // M6.22 Phase 3a — track which (courseId, sectionId) binding we've
+  // already initialized participants for. Without this, the participants
+  // effect fires every time `rostersByCourseId` changes identity — which
+  // happens every 5s during dashboard polling (the page re-renders on
+  // router.refresh()) — silently clobbering manual de-selections back to
+  // "all in section." Closes audit-canvas.md C1.
+  const initializedBindingRef = useRef<string | null>(null);
+
   // Reset section when course changes. If there's exactly one section, snap to it.
   // Depend only on the stable parent prop + courseId — courseRoster is
   // re-derived per render so its array refs change every render and would
@@ -83,13 +134,29 @@ export function TargetPicker({
     }
   }, [courseId, rostersByCourseId]);
 
-  // Default participants to "all currently visible" whenever course or
-  // section selection changes. Same reasoning re: deps as above.
+  // Default participants to "all currently visible" — but ONLY ONCE per
+  // (courseId, sectionId) binding. Subsequent re-renders (server polling
+  // refreshes giving us a fresh `rostersByCourseId` object reference)
+  // must NOT re-clobber the teacher's manual de-selections.
+  //
+  // On binding change, restore the sessionStorage-persisted set if one
+  // exists for the new binding; otherwise default to all visible.
   useEffect(() => {
     if (!courseId) {
+      initializedBindingRef.current = null;
       setParticipantIds(new Set());
       return;
     }
+    const binding = `${courseId}:${sectionId ?? "all"}`;
+    if (initializedBindingRef.current === binding) return;
+    initializedBindingRef.current = binding;
+
+    const persisted = loadPersistedParticipants(courseId, sectionId);
+    if (persisted) {
+      setParticipantIds(persisted);
+      return;
+    }
+
     const students = rostersByCourseId[courseId]?.students ?? [];
     const pool = sectionId
       ? students.filter((s) => s.section_ids.includes(sectionId))
@@ -110,6 +177,18 @@ export function TargetPicker({
       participantIds: Array.from(participantIds),
     });
   }, [selectedCourse, selectedAssignment, selectedSection, participantIds, onChange]);
+
+  // M6.22 Phase 3a — mirror the live participantIds set into
+  // sessionStorage so a polling refresh can rehydrate it instead of
+  // re-defaulting to "all in section." Guarded by initializedBindingRef
+  // so we don't write before the initialization effect has run.
+  useEffect(() => {
+    if (!courseId) return;
+    if (initializedBindingRef.current !== `${courseId}:${sectionId ?? "all"}`) {
+      return;
+    }
+    persistParticipants(courseId, sectionId, participantIds);
+  }, [courseId, sectionId, participantIds]);
 
   const visibleAssignments = useMemo(
     () => sortAndFilterAssignments(assignments, courseId, query),

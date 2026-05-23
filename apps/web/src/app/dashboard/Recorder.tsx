@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { clearSession, persistChunk } from "@/lib/recorder/persistence";
 
 type RecorderState = "idle" | "recording" | "paused" | "stopped";
 
@@ -8,19 +9,38 @@ export type RecordedAudio = {
   blob: Blob;
   mimeType: string;
   durationMs: number;
+  sessionId: string;
+};
+
+export type RecoveredRecording = {
+  blob: Blob;
+  mimeType: string;
+  sessionId: string;
 };
 
 export function Recorder({
   onAudioReady,
   onReset,
+  recovered,
 }: {
   onAudioReady?: (audio: RecordedAudio) => void;
   onReset?: () => void;
+  /**
+   * M6.22 Phase 3b — if RecordingFlow detected an orphan session on
+   * mount and the user opted to recover it, we render directly into
+   * the "stopped" state with the reconstructed blob playable.
+   */
+  recovered?: RecoveredRecording | null;
 }) {
-  const [state, setState] = useState<RecorderState>("idle");
+  const [state, setState] = useState<RecorderState>(
+    recovered ? "stopped" : "idle",
+  );
   const [elapsedMs, setElapsedMs] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioUrl, setAudioUrl] = useState<string | null>(() => {
+    if (!recovered) return null;
+    return URL.createObjectURL(recovered.blob);
+  });
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -30,6 +50,26 @@ export function Recorder({
   const accumulatedRef = useRef<number>(0);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  // M6.22 Phase 3b — per-recording uuid, used as the IDB key prefix and
+  // surfaced to RecordingFlow so it can call clearSession() after the
+  // upload finalizes (or the user discards).
+  const sessionIdRef = useRef<string>(recovered?.sessionId ?? "");
+  const chunkIndexRef = useRef<number>(0);
+  const startedAtRef = useRef<number>(0);
+
+  // Surface the recovered session's id + mime to onAudioReady so the
+  // parent treats it the same as a fresh recording.
+  useEffect(() => {
+    if (!recovered) return;
+    onAudioReady?.({
+      blob: recovered.blob,
+      mimeType: recovered.mimeType,
+      durationMs: 0, // unknown without re-walking the chunks
+      sessionId: recovered.sessionId,
+    });
+    // intentionally only on first mount with the recovered payload
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (state === "recording") {
@@ -69,6 +109,22 @@ export function Recorder({
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () =>
       document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [state]);
+
+  // M6.22 Phase 3b — warn the teacher before a tab close if a recording
+  // is active. Browsers ignore the message string and show their own
+  // generic "Leave site?" prompt; what matters is preventDefault() +
+  // returnValue. Once recording stops we remove the handler so the
+  // teacher can navigate away freely.
+  useEffect(() => {
+    if (state !== "recording" && state !== "paused") return;
+    function onBeforeUnload(e: BeforeUnloadEvent) {
+      e.preventDefault();
+      e.returnValue =
+        "You're still recording. If you close the tab now, the in-progress audio is kept locally for crash recovery, but the recording isn't uploaded.";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [state]);
 
   async function acquireWakeLock(): Promise<void> {
@@ -121,6 +177,9 @@ export function Recorder({
     }
     chunksRef.current = [];
     accumulatedRef.current = 0;
+    chunkIndexRef.current = 0;
+    startedAtRef.current = Date.now();
+    sessionIdRef.current = generateSessionId();
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -135,7 +194,19 @@ export function Recorder({
       recorderRef.current = recorder;
 
       recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
+        if (e.data.size > 0) {
+          chunksRef.current.push(e.data);
+          // M6.22 Phase 3b — persist to IDB best-effort. Don't await —
+          // we don't want to block the next 1s tick on storage I/O.
+          const idx = chunkIndexRef.current++;
+          void persistChunk({
+            session_id: sessionIdRef.current,
+            chunk_index: idx,
+            started_at: startedAtRef.current,
+            mime_type: mimeRef.current || "audio/mp4",
+            blob: e.data,
+          });
+        }
       };
       recorder.onstop = () => {
         const type = mimeRef.current || "audio/webm";
@@ -148,10 +219,14 @@ export function Recorder({
           blob,
           mimeType: type,
           durationMs: accumulatedRef.current,
+          sessionId: sessionIdRef.current,
         });
       };
 
-      // 1s timeslice — survives a tab crash with most of the audio intact
+      // 1s timeslice — every tick produces a chunk that's both pushed
+      // into memory AND persisted to IDB. Tab crash mid-recording means
+      // chunks live in IDB; recovery flow on next load reconstitutes
+      // them into one Blob.
       recorder.start(1000);
       segmentStartRef.current = Date.now();
       setElapsedMs(0);
@@ -191,6 +266,13 @@ export function Recorder({
     if (audioUrl) {
       URL.revokeObjectURL(audioUrl);
       setAudioUrl(null);
+    }
+    // M6.22 Phase 3b — discarding a recording must also clear the IDB
+    // backup, or the next dashboard mount would re-surface it as a
+    // recovery candidate.
+    if (sessionIdRef.current) {
+      void clearSession(sessionIdRef.current);
+      sessionIdRef.current = "";
     }
     accumulatedRef.current = 0;
     setElapsedMs(0);
@@ -309,6 +391,15 @@ function formatElapsed(ms: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function generateSessionId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  // Fallback: timestamp + random suffix. Not RFC-4122 but unique enough
+  // for a per-tab IDB key.
+  return `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function micErrorMessage(err: unknown): string {

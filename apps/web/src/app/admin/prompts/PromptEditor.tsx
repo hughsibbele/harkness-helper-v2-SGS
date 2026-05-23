@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import type { Tables } from "@harkness-helper/db";
 import { saveSystemPrompt } from "@/lib/actions/system-prompts";
 import { useAutoSaveDispatch } from "@/components/auto-save/context";
@@ -15,38 +15,52 @@ export function PromptEditor({
   prompt: Prompt;
   description: string;
 }) {
+  // M6.22 Phase 3c — track updated_at as the optimistic-concurrency
+  // baseline. Every save sends the value we last read; the server
+  // rejects with conflict:true if another writer beat us to it.
   const [updatedAt, setUpdatedAt] = useState(prompt.updated_at);
-  const dispatch = useAutoSaveDispatch();
+  const updatedAtRef = useRef(updatedAt);
+  useEffect(() => {
+    updatedAtRef.current = updatedAt;
+  }, [updatedAt]);
+  // M6.22 Phase 3c — register under a per-prompt key so the
+  // AutoSaveProvider's aggregator can show this editor's status without
+  // letting a quick "saved" from a sibling editor green-wash an error.
+  const dispatch = useAutoSaveDispatch(`prompt:${prompt.id}`);
   const [, startTransition] = useTransition();
   const formRef = useRef<HTMLFormElement>(null);
   const labelRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
 
-  function save() {
+  function save(): Promise<void> {
     const label = labelRef.current?.value ?? "";
     const body = bodyRef.current?.value ?? "";
     const labelChanged = label !== labelRef.current?.defaultValue;
     const bodyChanged = body !== bodyRef.current?.defaultValue;
-    if (!labelChanged && !bodyChanged) return;
+    if (!labelChanged && !bodyChanged) return Promise.resolve();
 
     dispatch({ kind: "saving" });
-    startTransition(async () => {
-      const r = await saveSystemPrompt(prompt.id, {
-        label: labelChanged ? label : undefined,
-        body: bodyChanged ? body : undefined,
+    return new Promise<void>((resolve) => {
+      startTransition(async () => {
+        const r = await saveSystemPrompt(prompt.id, {
+          label: labelChanged ? label : undefined,
+          body: bodyChanged ? body : undefined,
+          expected_updated_at: updatedAtRef.current,
+        });
+        if (r.ok) {
+          const nextUpdatedAt = r.updated_at ?? new Date().toISOString();
+          setUpdatedAt(nextUpdatedAt);
+          // Re-baseline the inputs so isFormDirty stops reporting as
+          // dirty after a clean save. React doesn't update DOM
+          // defaultValue/defaultChecked on re-render.
+          if (labelRef.current) labelRef.current.defaultValue = label;
+          if (bodyRef.current) bodyRef.current.defaultValue = body;
+          dispatch({ kind: "saved", at: Date.now() });
+        } else {
+          dispatch({ kind: "error", msg: r.message });
+        }
+        resolve();
       });
-      if (r.ok) {
-        const nowIso = new Date().toISOString();
-        setUpdatedAt(nowIso);
-        // Re-baseline the inputs so isFormDirty stops reporting as
-        // dirty after a clean save. React doesn't update DOM
-        // defaultValue/defaultChecked on re-render.
-        if (labelRef.current) labelRef.current.defaultValue = label;
-        if (bodyRef.current) bodyRef.current.defaultValue = body;
-        dispatch({ kind: "saved", at: Date.now() });
-      } else {
-        dispatch({ kind: "error", msg: r.message });
-      }
     });
   }
 
