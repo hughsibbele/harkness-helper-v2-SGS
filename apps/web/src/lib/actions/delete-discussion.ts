@@ -25,22 +25,30 @@ export async function deleteDiscussion(
     return { ok: false, message: "Not authorized." };
   }
 
-  // Delete the row first — cascades to participations via FK. If the
-  // storage cleanup that follows fails, we have an orphan file but no
-  // dangling row (better than the reverse, which would leave a phantom
-  // discussion the user can't see audio for).
-  const { error: deleteErr } = await admin
+  // M6.22 Phase 2 — idempotent + ownership-fenced delete. The `.eq("id",
+  // ...).eq("teacher_id", ...)` doubles as a fence: a second concurrent
+  // click sees 0 rows affected (some other actor already deleted the
+  // row), and a tampered call from a teacher who doesn't own this row
+  // fails the teacher_id check at the DB layer (defense in depth on top
+  // of the teacher-check above). Returning `.select("id")` lets us
+  // distinguish "deleted just now" from "already gone" — both are ok:true
+  // (idempotent UX) but the latter doesn't try to delete the audio twice.
+  const { data: deletedRows, error: deleteErr } = await admin
     .from("discussions")
     .delete()
-    .eq("id", discussionId);
+    .eq("id", discussionId)
+    .eq("teacher_id", teacher.id)
+    .select("id");
   if (deleteErr) return { ok: false, message: deleteErr.message };
 
-  // Best-effort remove the audio file. Don't fail the operation on storage
-  // errors — the row is already gone.
-  await admin.storage
-    .from(BUCKET)
-    .remove([discussion.audio_url])
-    .catch(() => {});
+  if (deletedRows && deletedRows.length > 0) {
+    // Best-effort remove the audio file. Don't fail the operation on storage
+    // errors — the row is already gone.
+    await admin.storage
+      .from(BUCKET)
+      .remove([discussion.audio_url])
+      .catch(() => {});
+  }
 
   revalidatePath("/dashboard");
   return { ok: true };

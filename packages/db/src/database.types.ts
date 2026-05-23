@@ -199,6 +199,8 @@ export type Database = {
           scrub_status: "ok" | "roster_missing" | "failed" | "skipped";
           transcription_prompt_body_snapshot: string | null;
           summary_prompt_body_snapshot: string | null;
+          summary_status: "ok" | "failed" | null;
+          summary_error: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -222,6 +224,8 @@ export type Database = {
           scrub_status?: "ok" | "roster_missing" | "failed" | "skipped";
           transcription_prompt_body_snapshot?: string | null;
           summary_prompt_body_snapshot?: string | null;
+          summary_status?: "ok" | "failed" | null;
+          summary_error?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -245,6 +249,8 @@ export type Database = {
           scrub_status?: "ok" | "roster_missing" | "failed" | "skipped";
           transcription_prompt_body_snapshot?: string | null;
           summary_prompt_body_snapshot?: string | null;
+          summary_status?: "ok" | "failed" | null;
+          summary_error?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -271,18 +277,27 @@ export type Database = {
           discussion_id: string;
           student_id: string;
           created_at: string;
+          super_grader_post_status: "ok" | "failed" | null;
+          super_grader_post_attempted_at: string | null;
+          super_grader_post_error: string | null;
         };
         Insert: {
           id?: string;
           discussion_id: string;
           student_id: string;
           created_at?: string;
+          super_grader_post_status?: "ok" | "failed" | null;
+          super_grader_post_attempted_at?: string | null;
+          super_grader_post_error?: string | null;
         };
         Update: {
           id?: string;
           discussion_id?: string;
           student_id?: string;
           created_at?: string;
+          super_grader_post_status?: "ok" | "failed" | null;
+          super_grader_post_attempted_at?: string | null;
+          super_grader_post_error?: string | null;
         };
         Relationships: [];
       };

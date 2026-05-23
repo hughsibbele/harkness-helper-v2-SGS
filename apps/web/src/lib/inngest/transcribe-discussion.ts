@@ -88,6 +88,12 @@ export const transcribeDiscussion = inngest.createFunction(
       const admin = createAdminDbClient();
       const message = String(error?.message ?? error ?? "unknown");
       const rosterMissing = message.startsWith("RosterMissingError:");
+      // Phase 2 state fence — only flip to 'failed' if the row is still in
+      // a pre-transcribed state. A late-arriving onFailure must NOT
+      // clobber a row whose Pass-1 already committed at state='transcribed'
+      // (which is the partial-success policy: Pass 2 throws are caught
+      // inside the function and recorded on summary_status without
+      // propagating to onFailure). M6.22 Phase 2.
       await admin
         .from("discussions")
         .update({
@@ -95,7 +101,8 @@ export const transcribeDiscussion = inngest.createFunction(
           error_message: message.slice(0, 1000),
           scrub_status: rosterMissing ? "roster_missing" : "failed",
         })
-        .eq("id", discussionId);
+        .eq("id", discussionId)
+        .in("state", ["uploaded", "transcribing"]);
     },
   },
   async ({ event, step, logger }) => {
@@ -141,13 +148,30 @@ export const transcribeDiscussion = inngest.createFunction(
       }
     });
 
-    await step.run("mark-transcribing", async () => {
-      const { error } = await admin
+    // Phase 2 state fence — only this worker should advance the row from
+    // 'uploaded' to 'transcribing'. If a duplicate `discussion.uploaded`
+    // event (Inngest replay, retried-from-UI, or a fast double-fire that
+    // slipped past the event_id dedup) spawned a parallel worker, exactly
+    // one of us flips the row; the other sees 0 rows affected and bails.
+    // Without this fence both would proceed, burn the Gemini cap twice,
+    // race the transcript writes, and double-fire the SG fan-out.
+    const transcribingClaimed = await step.run("mark-transcribing", async () => {
+      const { data, error } = await admin
         .from("discussions")
         .update({ state: "transcribing", error_message: null })
-        .eq("id", discussionId);
+        .eq("id", discussionId)
+        .eq("state", "uploaded")
+        .select("id");
       if (error) throw new Error(`mark transcribing: ${error.message}`);
+      return (data?.length ?? 0) > 0;
     });
+
+    if (!transcribingClaimed) {
+      logger.info(
+        `skipping ${discussionId} — mark-transcribing claim failed, another worker advanced the row`,
+      );
+      return { skipped: true, reason: "claim_lost" };
+    }
 
     // Load prompt bodies + roster as durable JSON. The compiled
     // (RegExp-bearing) scrubber is rebuilt OUTSIDE the step from the
@@ -293,60 +317,116 @@ export const transcribeDiscussion = inngest.createFunction(
       scrubFreeText(rawTranscript, compiled),
     );
 
-    // Save transcript before attempting summary — that way a summary failure
-    // doesn't lose the transcript work.
+    // M6.22 Phase 2 — commit Pass-1 success now. Flip state='transcribed'
+    // in the same UPDATE that writes the transcript, fenced on
+    // state='transcribing' so a stale onFailure / racing worker can't
+    // clobber a row that's already moved past. If Pass-2 fails after this
+    // point, the transcript remains visible to the teacher and the row
+    // records summary_status='failed' separately. Closes the audit's
+    // "Pass 1 success + Pass 2 failure discards the transcript" finding.
     await step.run("save-transcript", async () => {
-      const { error } = await admin
+      const { data, error } = await admin
         .from("discussions")
         .update({
           transcript: scrubbedTranscript,
           transcription_prompt_id: ctx.transcriptionPromptId,
-        })
-        .eq("id", discussionId);
-      if (error) throw new Error(`save transcript: ${error.message}`);
-    });
-
-    // Pass 2: summary (v1's GROUP_FEEDBACK prompt, rewritten in
-    // 20260522120001_rewrite_summary_prompt.sql to instruct Gemini to use
-    // anonymized tokens — never real names). Receives the already-scrubbed
-    // transcript so even if Pass 2 tried to surface a real name, the input
-    // doesn't carry one.
-    const rawSummary = await step.run("gemini-summarize", async () => {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
-
-      const filled = fillTemplate(ctx.summaryPromptBody, {
-        grade: "not yet assigned",
-        transcript: scrubbedTranscript,
-      });
-
-      const ai = new GoogleGenAI({ apiKey });
-      const result = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: [{ role: "user", parts: [{ text: filled }] }],
-      });
-      const text = result.text ?? "";
-      if (!text.trim()) throw new Error("Gemini returned an empty summary");
-      return text;
-    });
-
-    const scrubbedSummary = await step.run("scrub-summary", () =>
-      // Defense-in-depth: Pass 2's input was already scrubbed but a model
-      // can still hallucinate a name (or partially obey).
-      scrubFreeText(rawSummary, compiled),
-    );
-
-    await step.run("save-summary", async () => {
-      const { error } = await admin
-        .from("discussions")
-        .update({
-          summary: scrubbedSummary,
-          summary_prompt_id: ctx.summaryPromptId,
           state: "transcribed",
         })
-        .eq("id", discussionId);
-      if (error) throw new Error(`save summary: ${error.message}`);
+        .eq("id", discussionId)
+        .eq("state", "transcribing")
+        .select("id");
+      if (error) throw new Error(`save transcript: ${error.message}`);
+      if (!data || data.length === 0) {
+        throw new Error(
+          "save transcript: 0 rows affected (state fence — row already moved past 'transcribing')",
+        );
+      }
     });
+
+    // Pass 2: summary. Best-effort by design — a Gemini summary failure
+    // must NOT discard the Pass-1 transcript. Errors land on
+    // summary_status='failed' + summary_error; state stays 'transcribed'.
+    // The summary prompt was rewritten in 20260522120001 to instruct
+    // Gemini to use anonymized tokens — never real names. Receives the
+    // already-scrubbed transcript so even if Pass 2 leaked a real name,
+    // the input doesn't carry one.
+    type SummaryOutcome =
+      | { ok: true; text: string }
+      | { ok: false; error: string };
+
+    const summaryOutcome: SummaryOutcome = await step.run(
+      "gemini-summarize",
+      async (): Promise<SummaryOutcome> => {
+        try {
+          const apiKey = process.env.GEMINI_API_KEY;
+          if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
+
+          const filled = fillTemplate(ctx.summaryPromptBody, {
+            grade: "not yet assigned",
+            transcript: scrubbedTranscript,
+          });
+
+          const ai = new GoogleGenAI({ apiKey });
+          const result = await ai.models.generateContent({
+            model: GEMINI_MODEL,
+            contents: [{ role: "user", parts: [{ text: filled }] }],
+          });
+          const text = result.text ?? "";
+          if (!text.trim()) {
+            return { ok: false, error: "Gemini returned an empty summary" };
+          }
+          return { ok: true, text };
+        } catch (err) {
+          return {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      },
+    );
+
+    let summaryLength = 0;
+    if (!summaryOutcome.ok) {
+      await step.run("record-summary-failure", async () => {
+        const { error } = await admin
+          .from("discussions")
+          .update({
+            summary_status: "failed",
+            summary_error: summaryOutcome.error.slice(0, 1000),
+          })
+          .eq("id", discussionId);
+        if (error) {
+          throw new Error(`record summary failure: ${error.message}`);
+        }
+      });
+      logger.info(
+        `pass-2 summary failed for ${discussionId}: ${summaryOutcome.error}`,
+      );
+    } else {
+      const scrubbedSummary = await step.run("scrub-summary", () =>
+        // Defense-in-depth: Pass 2's input was already scrubbed but a model
+        // can still hallucinate a name (or partially obey).
+        scrubFreeText(summaryOutcome.text, compiled),
+      );
+      summaryLength = scrubbedSummary.length;
+
+      // State fence — only write the summary if we're still in
+      // 'transcribed'. If something else moved the row past us (the SG
+      // push step is the only candidate, and it runs after this, so this
+      // is defense-in-depth), we don't clobber.
+      await step.run("save-summary", async () => {
+        const { error } = await admin
+          .from("discussions")
+          .update({
+            summary: scrubbedSummary,
+            summary_prompt_id: ctx.summaryPromptId,
+            summary_status: "ok",
+          })
+          .eq("id", discussionId)
+          .in("state", ["transcribed"]);
+        if (error) throw new Error(`save summary: ${error.message}`);
+      });
+    }
 
     // Best-effort fan-out to super-grader. pushDiscussionToSuperGrader
     // never throws — failures land in `discussions.super_grader_response`
@@ -360,7 +440,8 @@ export const transcribeDiscussion = inngest.createFunction(
     return {
       discussionId,
       transcriptLength: scrubbedTranscript.length,
-      summaryLength: scrubbedSummary.length,
+      summaryLength,
+      summaryOk: summaryOutcome.ok,
       pushOutcome,
     };
   },

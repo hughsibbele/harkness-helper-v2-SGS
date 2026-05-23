@@ -5,9 +5,10 @@ import { buildHarknessEnvelopeForCanvasIds } from "./envelope";
 const TIMEOUT_MS = 5_000;
 
 type AttemptResult =
-  | { canvas_user_id: string; ok: true }
+  | { canvas_user_id: string; participation_id: string; ok: true }
   | {
       canvas_user_id: string;
+      participation_id: string;
       ok: false;
       status?: number;
       error: string;
@@ -29,10 +30,21 @@ export type PushOutcome =
  * own row.
  *
  * Best-effort by design: transient SG outages do not raise. Per-attempt
- * failures are persisted to `discussions.super_grader_response` for a future
- * retry surface, and `discussions.super_grader_post_status` flips to
- * 'error'. On full success: status → 'posted' AND `discussions.state` →
- * 'posted_to_super_grader'.
+ * results are persisted to BOTH:
+ *   - participations.super_grader_post_{status,attempted_at,error} — the
+ *     per-participation record. M6.22 Phase 2 — enables a future retry to
+ *     filter just the failed participants without parsing the aggregate
+ *     JSONB.
+ *   - discussions.super_grader_response (aggregate JSONB) +
+ *     super_grader_post_status — the existing aggregate shape, derived
+ *     from per-participation outcomes.
+ *
+ * Aggregate state transitions:
+ *   - All participations succeed AND state='transcribed' (fenced) →
+ *     state='posted_to_super_grader'. The fence prevents a stale push
+ *     from clobbering a row that, say, retention archived in the
+ *     meantime.
+ *   - Any participation fails → status='error', state stays 'transcribed'.
  *
  * Silent no-op when SUPER_GRADER_API_URL / SUPER_GRADER_INGEST_TOKEN /
  * NEXT_PUBLIC_APP_URL is unset (local/preview shape where SG isn't deployed
@@ -54,9 +66,12 @@ export async function pushDiscussionToSuperGrader(
 
   const admin = createAdminDbClient();
 
-  // 1. Load the discussion + its participants' canvas_user_ids.
+  // 1. Load the discussion + its participations (with canvas_user_ids).
+  //    Per-participation join lets us write per-participation status
+  //    without a second lookup.
   let canvasAssignmentId: string;
-  let canvasUserIds: string[];
+  type Participant = { participation_id: string; canvas_user_id: string };
+  let participants: Participant[];
   try {
     const { data: discussion, error: discussionErr } = await admin
       .from("discussions")
@@ -70,27 +85,27 @@ export async function pushDiscussionToSuperGrader(
 
     const { data: participations, error: participationsErr } = await admin
       .from("participations")
-      .select("students!inner ( canvas_user_id )")
+      .select("id, students!inner ( canvas_user_id )")
       .eq("discussion_id", discussionId);
     if (participationsErr) throw new Error(participationsErr.message);
 
     type Row = {
+      id: string;
       students:
         | { canvas_user_id: string }
         | { canvas_user_id: string }[]
         | null;
     };
     const seen = new Set<string>();
-    canvasUserIds = ((participations ?? []) as unknown as Row[])
+    participants = ((participations ?? []) as unknown as Row[])
       .map((r) => {
         const s = Array.isArray(r.students) ? r.students[0] : r.students;
-        return s?.canvas_user_id ?? null;
+        const cuid = s?.canvas_user_id ?? null;
+        if (!cuid || seen.has(cuid)) return null;
+        seen.add(cuid);
+        return { participation_id: r.id, canvas_user_id: cuid };
       })
-      .filter((id): id is string => {
-        if (!id || seen.has(id)) return false;
-        seen.add(id);
-        return true;
-      });
+      .filter((r): r is Participant => r !== null);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const attemptedAt = new Date().toISOString();
@@ -102,7 +117,7 @@ export async function pushDiscussionToSuperGrader(
           posted_for: [],
           failed: [{ canvas_user_id: "(load)", error: message }],
           attempted_at: attemptedAt,
-        },
+        } as Json,
       })
       .eq("id", discussionId);
     return {
@@ -115,16 +130,17 @@ export async function pushDiscussionToSuperGrader(
 
   // 2. Fan out per-participant POSTs in parallel.
   const attempts = await Promise.all(
-    canvasUserIds.map(
-      async (canvasUserId): Promise<AttemptResult> => {
+    participants.map(
+      async ({ participation_id, canvas_user_id }): Promise<AttemptResult> => {
         try {
           const envelope = await buildHarknessEnvelopeForCanvasIds(
-            canvasUserId,
+            canvas_user_id,
             canvasAssignmentId,
           );
           if (!envelope) {
             return {
-              canvas_user_id: canvasUserId,
+              canvas_user_id,
+              participation_id,
               ok: false,
               error: "envelope build returned null (no transcribed discussion)",
             };
@@ -144,24 +160,43 @@ export async function pushDiscussionToSuperGrader(
             if (!res.ok) {
               const body = await res.text().catch(() => "");
               return {
-                canvas_user_id: canvasUserId,
+                canvas_user_id,
+                participation_id,
                 ok: false,
                 status: res.status,
                 error: body.slice(0, 500) || `HTTP ${res.status}`,
               };
             }
-            return { canvas_user_id: canvasUserId, ok: true };
+            return { canvas_user_id, participation_id, ok: true };
           } finally {
             clearTimeout(timeout);
           }
         } catch (err) {
           return {
-            canvas_user_id: canvasUserId,
+            canvas_user_id,
+            participation_id,
             ok: false,
             error: err instanceof Error ? err.message : String(err),
           };
         }
       },
+    ),
+  );
+
+  // 3a. Record per-participation outcomes. M6.22 Phase 2 — a future
+  //     retry path can filter participations.super_grader_post_status
+  //     ='failed' instead of parsing the aggregate JSONB.
+  const attemptedAt = new Date().toISOString();
+  await Promise.all(
+    attempts.map((a) =>
+      admin
+        .from("participations")
+        .update({
+          super_grader_post_status: a.ok ? "ok" : "failed",
+          super_grader_post_attempted_at: attemptedAt,
+          super_grader_post_error: a.ok ? null : a.error.slice(0, 500),
+        })
+        .eq("id", a.participation_id),
     ),
   );
 
@@ -173,30 +208,35 @@ export async function pushDiscussionToSuperGrader(
       status,
       error,
     }));
-  const attemptedAt = new Date().toISOString();
 
-  // 3. Persist status + diagnostics. State transitions to
-  //    'posted_to_super_grader' only if every participant succeeded.
+  // 3b. Aggregate state transitions. The aggregate flip to
+  //     'posted_to_super_grader' is fenced on state='transcribed' so a
+  //     stale push (or a retention archive in flight) can't clobber a
+  //     row that's already moved past. M6.22 Phase 2 state-fence.
   const allOk = failed.length === 0 && postedFor.length > 0;
-  const update: {
-    super_grader_post_status: "posted" | "error" | "pending";
-    super_grader_response: Json;
-    state?: "posted_to_super_grader";
-  } = {
-    super_grader_post_status: allOk
-      ? "posted"
-      : failed.length > 0
-        ? "error"
-        : "pending",
-    super_grader_response: {
-      posted_for: postedFor,
-      failed,
-      attempted_at: attemptedAt,
-    } as Json,
-  };
-  if (allOk) update.state = "posted_to_super_grader";
+  await admin
+    .from("discussions")
+    .update({
+      super_grader_post_status: allOk
+        ? "posted"
+        : failed.length > 0
+          ? "error"
+          : "pending",
+      super_grader_response: {
+        posted_for: postedFor,
+        failed,
+        attempted_at: attemptedAt,
+      } as Json,
+    })
+    .eq("id", discussionId);
 
-  await admin.from("discussions").update(update).eq("id", discussionId);
+  if (allOk) {
+    await admin
+      .from("discussions")
+      .update({ state: "posted_to_super_grader" })
+      .eq("id", discussionId)
+      .eq("state", "transcribed");
+  }
 
   return {
     kind: "complete",

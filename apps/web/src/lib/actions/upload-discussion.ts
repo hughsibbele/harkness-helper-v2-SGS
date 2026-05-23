@@ -269,7 +269,14 @@ export async function finalizeDiscussion(params: {
   }
 
   try {
+    // M6.22 Phase 2 — deterministic event id. Inngest dedups events with
+    // the same `id` inside its rolling window, so a fast double-fire from
+    // the client (or a UI replay button) won't spawn two transcription
+    // workers. Defense-in-depth alongside the worker's `.eq('state',
+    // 'uploaded')` claim — the fence wins if dedup misses, but most of
+    // the time dedup spares us from even running the load step twice.
     await inngest.send({
+      id: `discussion-uploaded:${discussionId}`,
       name: "discussion.uploaded",
       data: { discussionId },
     });
