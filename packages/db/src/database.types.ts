@@ -32,6 +32,8 @@ export type Database = {
           google_access_token_encrypted: string | null;
           google_refresh_token_encrypted: string | null;
           google_token_expires_at: string | null;
+          drive_folder_id: string | null;
+          canvas_comment_enabled: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -48,6 +50,8 @@ export type Database = {
           google_access_token_encrypted?: string | null;
           google_refresh_token_encrypted?: string | null;
           google_token_expires_at?: string | null;
+          drive_folder_id?: string | null;
+          canvas_comment_enabled?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -64,6 +68,8 @@ export type Database = {
           google_access_token_encrypted?: string | null;
           google_refresh_token_encrypted?: string | null;
           google_token_expires_at?: string | null;
+          drive_folder_id?: string | null;
+          canvas_comment_enabled?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -201,6 +207,13 @@ export type Database = {
           summary_prompt_body_snapshot: string | null;
           summary_status: "ok" | "failed" | null;
           summary_error: string | null;
+          drive_doc_id: string | null;
+          drive_doc_url: string | null;
+          drive_audio_id: string | null;
+          drive_audio_url: string | null;
+          canvas_comment_post_status: "ok" | "failed" | "skipped" | null;
+          canvas_comment_posted_at: string | null;
+          canvas_comment_error: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -226,6 +239,13 @@ export type Database = {
           summary_prompt_body_snapshot?: string | null;
           summary_status?: "ok" | "failed" | null;
           summary_error?: string | null;
+          drive_doc_id?: string | null;
+          drive_doc_url?: string | null;
+          drive_audio_id?: string | null;
+          drive_audio_url?: string | null;
+          canvas_comment_post_status?: "ok" | "failed" | "skipped" | null;
+          canvas_comment_posted_at?: string | null;
+          canvas_comment_error?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -251,6 +271,13 @@ export type Database = {
           summary_prompt_body_snapshot?: string | null;
           summary_status?: "ok" | "failed" | null;
           summary_error?: string | null;
+          drive_doc_id?: string | null;
+          drive_doc_url?: string | null;
+          drive_audio_id?: string | null;
+          drive_audio_url?: string | null;
+          canvas_comment_post_status?: "ok" | "failed" | "skipped" | null;
+          canvas_comment_posted_at?: string | null;
+          canvas_comment_error?: string | null;
           created_at?: string;
           updated_at?: string;
         };

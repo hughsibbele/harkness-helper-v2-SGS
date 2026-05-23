@@ -30,6 +30,8 @@ import {
   getActiveSummaryPrompt,
   getActiveTranscriptionPrompt,
 } from "@harkness-helper/prompts";
+import { postDiscussionDraftComments } from "@/lib/canvas/post-discussion-comment";
+import { saveDiscussionToDrive } from "@/lib/google/save-discussion";
 import { pushDiscussionToSuperGrader } from "@/lib/peers/notify";
 import { inngest } from "./client";
 
@@ -428,6 +430,113 @@ export const transcribeDiscussion = inngest.createFunction(
       });
     }
 
+    // M7.5 — auto-save to Drive after Pass-1 + Pass-2 land. Best-effort:
+    // a Drive failure (auth missing, quota, etc.) is recorded but does
+    // NOT propagate to onFailure (which would clobber state='transcribed'
+    // and discard the transcript work). Idempotent: skips when
+    // discussion.drive_doc_url is already populated (re-run of a
+    // worker that already committed Drive).
+    const driveOutcome = await step.run("save-to-drive", async () => {
+      const { data: row, error: loadErr } = await admin
+        .from("discussions")
+        .select(
+          "id, teacher_id, audio_url, transcript, summary, recorded_at, canvas_assignment_id, canvas_course_id, canvas_section_id, drive_doc_url",
+        )
+        .eq("id", discussionId)
+        .single();
+      if (loadErr || !row) {
+        return {
+          ok: false,
+          skipped: false,
+          error: `load: ${loadErr?.message ?? "not found"}`,
+        };
+      }
+      if (row.drive_doc_url) {
+        return { ok: true, skipped: true, drive_doc_url: row.drive_doc_url };
+      }
+      try {
+        const refs = await saveDiscussionToDrive(row);
+        const { error: writeErr } = await admin
+          .from("discussions")
+          .update({
+            drive_doc_id: refs.doc.id,
+            drive_doc_url: refs.doc.webViewLink,
+            drive_audio_id: refs.audio.id,
+            drive_audio_url: refs.audio.webViewLink,
+          })
+          .eq("id", discussionId);
+        if (writeErr) throw new Error(`persist: ${writeErr.message}`);
+        return {
+          ok: true,
+          skipped: false,
+          drive_doc_url: refs.doc.webViewLink,
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.info(`save-to-drive failed for ${discussionId}: ${message}`);
+        return { ok: false, skipped: false, error: message };
+      }
+    });
+
+    // M7.5 — post a draft Canvas comment to each participant's submission
+    // carrying the Drive link. Gated by teachers.canvas_comment_enabled
+    // (default true). Skips if Drive failed (no link to point at) or if
+    // canvas_comment_posted_at is already set (idempotent re-run).
+    // Best-effort: per-participant failures aggregate to a 'failed'
+    // status but don't propagate.
+    if (driveOutcome.ok && "drive_doc_url" in driveOutcome) {
+      await step.run("post-canvas-comment", async () => {
+        const { data: row, error: loadErr } = await admin
+          .from("discussions")
+          .select("canvas_comment_posted_at")
+          .eq("id", discussionId)
+          .single();
+        if (loadErr) {
+          logger.info(
+            `post-canvas-comment load failed for ${discussionId}: ${loadErr.message}`,
+          );
+          return;
+        }
+        if (row.canvas_comment_posted_at) return; // already done
+
+        const outcome = await postDiscussionDraftComments({
+          discussionId,
+          driveDocUrl: driveOutcome.drive_doc_url,
+        });
+
+        if (outcome.kind === "skipped") {
+          await admin
+            .from("discussions")
+            .update({
+              canvas_comment_post_status: "skipped",
+              canvas_comment_posted_at: new Date().toISOString(),
+              canvas_comment_error: outcome.reason.slice(0, 1000),
+            })
+            .eq("id", discussionId);
+          return;
+        }
+
+        const allOk =
+          outcome.failed.length === 0 && outcome.posted_for.length > 0;
+        const errorSummary =
+          outcome.failed.length > 0
+            ? outcome.failed
+                .slice(0, 5)
+                .map((f) => `${f.canvas_user_id}: ${f.error}`)
+                .join("; ")
+                .slice(0, 1000)
+            : null;
+        await admin
+          .from("discussions")
+          .update({
+            canvas_comment_post_status: allOk ? "ok" : "failed",
+            canvas_comment_posted_at: new Date().toISOString(),
+            canvas_comment_error: errorSummary,
+          })
+          .eq("id", discussionId);
+      });
+    }
+
     // Best-effort fan-out to super-grader. pushDiscussionToSuperGrader
     // never throws — failures land in `discussions.super_grader_response`
     // and `super_grader_post_status` for a future retry surface. We do
@@ -442,6 +551,7 @@ export const transcribeDiscussion = inngest.createFunction(
       transcriptLength: scrubbedTranscript.length,
       summaryLength,
       summaryOk: summaryOutcome.ok,
+      driveOk: driveOutcome.ok,
       pushOutcome,
     };
   },

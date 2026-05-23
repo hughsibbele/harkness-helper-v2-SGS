@@ -26,6 +26,8 @@ export type DiscussionListRow = {
   audio_signed_url: string | null;
   has_transcript: boolean;
   has_summary: boolean;
+  drive_doc_url: string | null;
+  canvas_comment_post_status: "ok" | "failed" | "skipped" | null;
 };
 
 const STATE_STYLES: Record<DiscussionState, { dot: string; label: string }> = {
@@ -196,15 +198,40 @@ export function DiscussionList({
                     <DeleteDiscussionButton discussionId={d.id} />
                   </div>
                 </div>
-                <div className="mt-1 flex items-center gap-2 text-xs">
-                  <span
-                    aria-hidden="true"
-                    className={`inline-block h-2 w-2 rounded-full ${style.dot}`}
-                  />
-                  <span className="text-cool-gray">{style.label}</span>
+                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                  <span className="inline-flex items-center gap-2">
+                    <span
+                      aria-hidden="true"
+                      className={`inline-block h-2 w-2 rounded-full ${style.dot}`}
+                    />
+                    <span className="text-cool-gray">{style.label}</span>
+                  </span>
                   {d.state === "failed" && d.error_message && (
                     <span className="text-red-700" title={d.error_message}>
                       — {d.error_message}
+                    </span>
+                  )}
+                  {d.drive_doc_url && (
+                    <a
+                      href={d.drive_doc_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-dark-blue underline-offset-2 hover:underline"
+                    >
+                      Open in Drive ↗
+                    </a>
+                  )}
+                  {d.canvas_comment_post_status === "ok" && (
+                    <span
+                      className="text-cool-gray"
+                      title="Draft comment posted to each participant's Canvas submission"
+                    >
+                      · draft posted to Canvas
+                    </span>
+                  )}
+                  {d.canvas_comment_post_status === "failed" && (
+                    <span className="text-amber-700">
+                      · Canvas comment failed
                     </span>
                   )}
                 </div>

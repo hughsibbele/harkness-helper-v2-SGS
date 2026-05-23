@@ -55,7 +55,7 @@ export default async function DashboardPage() {
       supabase
         .from("discussions")
         .select(
-          "id,recorded_at,state,error_message,canvas_course_id,canvas_assignment_id,canvas_section_id,audio_url,transcript,summary",
+          "id,recorded_at,state,error_message,canvas_course_id,canvas_assignment_id,canvas_section_id,audio_url,transcript,summary,drive_doc_url,canvas_comment_post_status",
         )
         .eq("teacher_id", teacher.id)
         .gte("recorded_at", academicYearStart())
@@ -124,6 +124,8 @@ export default async function DashboardPage() {
     audio_signed_url: signedUrls[i] ?? null,
     has_transcript: !!d.transcript && d.transcript.length > 0,
     has_summary: !!d.summary && d.summary.length > 0,
+    drive_doc_url: d.drive_doc_url,
+    canvas_comment_post_status: d.canvas_comment_post_status,
   }));
 
   // Ask super-grader which assignments it's tracking — for the indicator

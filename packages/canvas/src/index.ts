@@ -290,3 +290,55 @@ export async function listCourseSections(
   const path = `/courses/${canvasCourseId}/sections?per_page=100`;
   return paginate<CanvasSection>(config, path);
 }
+
+/**
+ * M7.5 — post a teacher-authored DRAFT comment on a single student's
+ * submission. Draft visibility means the comment lands in SpeedGrader's
+ * editable-drafts pane (visible to the teacher; hidden from the student
+ * until the teacher posts it).
+ *
+ * Authored by the configured `CANVAS_API_TOKEN` owner (HH is
+ * single-tenant — same token across all teachers). No `as_user_id`
+ * masquerade — HH doesn't post as the student.
+ *
+ * Canvas API contract (verified against `instructure/canvas-lms`'s
+ * `submissions_api_controller.rb#update`):
+ *   PUT /api/v1/courses/:cid/assignments/:aid/submissions/:uid
+ *     submission[draft_comment]=true
+ *     comment[text_comment]=<plain text>
+ *
+ * `text_comment` is plain text; caller pre-flattens any HTML/markdown.
+ * Comments aren't gated on submission_types (the controller calls
+ * `find_or_create_submission(@user)`), so this works on every
+ * assignment shape — including unsubmitted ones.
+ */
+export async function postTeacherDraftComment(
+  config: CanvasConfig,
+  canvasCourseId: string | number,
+  canvasAssignmentId: string | number,
+  canvasUserId: string | number,
+  textComment: string,
+): Promise<void> {
+  const params = new URLSearchParams();
+  params.set("submission[draft_comment]", "true");
+  params.set("comment[text_comment]", textComment);
+
+  const path = `/courses/${canvasCourseId}/assignments/${canvasAssignmentId}/submissions/${encodeURIComponent(String(canvasUserId))}`;
+
+  const res = await canvasFetch(config, path, {
+    method: "PUT",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params.toString(),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new CanvasError(
+      `Canvas PUT draft comment (assignment ${canvasAssignmentId} user ${canvasUserId}) returned ${res.status}.`,
+      res.status,
+      body,
+    );
+  }
+  // Drain the body so the connection can be reused.
+  await res.text().catch(() => "");
+}
