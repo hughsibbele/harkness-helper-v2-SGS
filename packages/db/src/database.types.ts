@@ -197,6 +197,8 @@ export type Database = {
           error_message: string | null;
           roster_snapshot: Json | null;
           scrub_status: "ok" | "roster_missing" | "failed" | "skipped";
+          transcription_prompt_body_snapshot: string | null;
+          summary_prompt_body_snapshot: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -218,6 +220,8 @@ export type Database = {
           error_message?: string | null;
           roster_snapshot?: Json | null;
           scrub_status?: "ok" | "roster_missing" | "failed" | "skipped";
+          transcription_prompt_body_snapshot?: string | null;
+          summary_prompt_body_snapshot?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -239,6 +243,8 @@ export type Database = {
           error_message?: string | null;
           roster_snapshot?: Json | null;
           scrub_status?: "ok" | "roster_missing" | "failed" | "skipped";
+          transcription_prompt_body_snapshot?: string | null;
+          summary_prompt_body_snapshot?: string | null;
           created_at?: string;
           updated_at?: string;
         };

@@ -8,6 +8,10 @@ import {
 } from "@harkness-helper/anonymizer";
 import { createAdminDbClient } from "@harkness-helper/db/admin";
 import type { Json } from "@harkness-helper/db";
+import {
+  getActiveSummaryPrompt,
+  getActiveTranscriptionPrompt,
+} from "@harkness-helper/prompts";
 import { getCurrentTeacher } from "@/lib/auth/teacher";
 import { inngest } from "@/lib/inngest/client";
 import type { FinalizeDiscussionResult } from "./upload-discussion.types";
@@ -147,6 +151,46 @@ export async function finalizeDiscussion(params: {
   }
   const rosterById = new Map(roster.map((s) => [s.canvas_user_id, s]));
 
+  // Fail-closed participant validation. Every picked participantId must
+  // resolve to a roster entry with a non-empty email — otherwise the
+  // student would have no participation row (silent drop), and any spoken
+  // utterance of their name in the transcript would never make it into
+  // the scrubber's compiled roster (no email = no anon_token = no scrub
+  // entry). H4 fix: surface as "re-sync, then re-pick" rather than ship a
+  // partial set. M6.22 Phase 1.
+  const droppedParticipants = participantIds.filter(
+    (cuid) => !rosterById.get(cuid)?.email,
+  );
+  if (droppedParticipants.length > 0) {
+    return {
+      ok: false,
+      message:
+        `${droppedParticipants.length} selected participant(s) aren't in the synced roster ` +
+        `or don't have an email recorded. Re-sync this course from Canvas and re-pick, or ` +
+        `un-pick the affected students. Missing canvas_user_ids: ` +
+        droppedParticipants.slice(0, 10).join(", ") +
+        (droppedParticipants.length > 10
+          ? ` (+${droppedParticipants.length - 10} more)`
+          : ""),
+    };
+  }
+
+  // M6.22 Phase 1 — snapshot the prompt bodies at finalize time so the
+  // Inngest worker can't drift away from what was active when the
+  // recording was uploaded. Closes audit-discussion-state.md C2.
+  let transcriptionPrompt, summaryPrompt;
+  try {
+    [transcriptionPrompt, summaryPrompt] = await Promise.all([
+      getActiveTranscriptionPrompt(),
+      getActiveSummaryPrompt(),
+    ]);
+  } catch (err) {
+    return {
+      ok: false,
+      message: `prompts lookup: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
   const today = new Date().toISOString().slice(0, 10);
   const { data: discussion, error: discussionErr } = await admin
     .from("discussions")
@@ -160,6 +204,10 @@ export async function finalizeDiscussion(params: {
       state: "uploaded",
       roster_snapshot: roster as unknown as Json,
       scrub_status: "ok",
+      transcription_prompt_id: transcriptionPrompt.id,
+      summary_prompt_id: summaryPrompt.id,
+      transcription_prompt_body_snapshot: transcriptionPrompt.body,
+      summary_prompt_body_snapshot: summaryPrompt.body,
     })
     .select("id")
     .single();

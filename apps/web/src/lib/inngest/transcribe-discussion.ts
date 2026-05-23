@@ -149,21 +149,49 @@ export const transcribeDiscussion = inngest.createFunction(
       if (error) throw new Error(`mark transcribing: ${error.message}`);
     });
 
-    // Load both prompts and the roster as durable JSON. The compiled
+    // Load prompt bodies + roster as durable JSON. The compiled
     // (RegExp-bearing) scrubber is rebuilt OUTSIDE the step from the
     // durable roster array, since RegExp cannot round-trip through
     // step.run's JSON serialization layer.
     //
-    // Roster comes from the `roster_snapshot` column populated at finalize
-    // time. For legacy rows (pre-Phase-0, marked scrub_status='skipped')
-    // we fall back to a live read against course_rosters. Either way we
-    // throw RosterMissingError when no usable roster is available — the
-    // onFailure handler catches and marks scrub_status='roster_missing'.
+    // Phase 1 snapshot contract:
+    //   - Prompt body comes from discussions.{transcription,summary}_
+    //     prompt_body_snapshot when non-null (snapshotted at
+    //     finalizeDiscussion time). Closes audit C2 — an admin auto-save
+    //     during the job cannot change the body the worker uses, and
+    //     Pass 1 + Pass 2 always agree.
+    //   - Legacy rows (pre-Phase-1, snapshot columns NULL) fall back to
+    //     getActive*Prompt() live read, same as before. Backward-compat.
+    //
+    // Phase 0 snapshot contract:
+    //   - Roster comes from discussions.roster_snapshot (populated at
+    //     finalize time). Legacy rows (pre-Phase-0, scrub_status='skipped')
+    //     fall back to a live course_rosters read.
+    //   - Throws RosterMissingError when no usable roster is available —
+    //     onFailure marks scrub_status='roster_missing'.
     const ctx = await step.run("load-prompts-and-roster", async () => {
-      const [transcriptionPrompt, summaryPrompt] = await Promise.all([
-        getActiveTranscriptionPrompt(),
-        getActiveSummaryPrompt(),
-      ]);
+      // Pin prompt body to the finalize-time snapshot when present.
+      let transcriptionPromptId: string | null =
+        discussion.transcription_prompt_id;
+      let transcriptionPromptBody = discussion.transcription_prompt_body_snapshot;
+      let summaryPromptId: string | null = discussion.summary_prompt_id;
+      let summaryPromptBody = discussion.summary_prompt_body_snapshot;
+
+      if (!transcriptionPromptBody || !summaryPromptBody) {
+        // Legacy row — one or both snapshots are missing. Read live.
+        const [tp, sp] = await Promise.all([
+          getActiveTranscriptionPrompt(),
+          getActiveSummaryPrompt(),
+        ]);
+        if (!transcriptionPromptBody) {
+          transcriptionPromptId = tp.id;
+          transcriptionPromptBody = tp.body;
+        }
+        if (!summaryPromptBody) {
+          summaryPromptId = sp.id;
+          summaryPromptBody = sp.body;
+        }
+      }
 
       let roster = normalizeRoster(discussion.roster_snapshot);
 
@@ -190,10 +218,10 @@ export const transcribeDiscussion = inngest.createFunction(
       }
 
       return {
-        transcriptionPromptId: transcriptionPrompt.id,
-        transcriptionPromptBody: transcriptionPrompt.body,
-        summaryPromptId: summaryPrompt.id,
-        summaryPromptBody: summaryPrompt.body,
+        transcriptionPromptId,
+        transcriptionPromptBody,
+        summaryPromptId,
+        summaryPromptBody,
         roster,
       };
     });
