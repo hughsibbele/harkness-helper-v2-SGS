@@ -75,6 +75,90 @@ outbound webhook for the first time. Diagnostics land in
 `discussions.super_grader_post_status` + `super_grader_response` —
 check those if SG doesn't show a Harkness card.
 
+**M6.22 remediation — done 2026-05-22 (Phases 0 → 0b → 0c → 1 → 2 → 3).**
+Six-agent audit on 2026-05-22 surfaced ~98 findings; the critical path is
+closed. Full per-phase scope + reasoning in
+[`REMEDIATION_PLAN.md`](./REMEDIATION_PLAN.md) and the
+[`audits/`](./audits/) directory. Headline changes touching daily code:
+
+- **Anonymizer rewritten** (`packages/anonymizer/src/index.ts`) — ports
+  SG's `scrub.ts` shape (`nameVariants` covers full/first/last/hyphen-
+  pieces; possessives `'s` + `'s`; Unicode word boundaries
+  `(?<![\p{L}\p{N}_])`; longest-first ordering). `scrubText` + `compileRoster`
+  throw typed `RosterMissingError` instead of silently no-op'ing on
+  empty roster. `anonToken` enforces salt ≥ 16 bytes. 20 vitest tests.
+- **Fail-closed roster contract.** `finalizeDiscussion` refuses to insert
+  a discussion if `course_rosters` is missing/empty/has-no-email-students
+  OR if any picked participantId lacks a usable email. Worker reads
+  `discussions.roster_snapshot` (populated at finalize) and refuses to
+  call Gemini if the snapshot is missing — `onFailure` writes
+  `scrub_status='roster_missing'` for diagnostics.
+- **Prompt-body snapshots.** `discussions.transcription_prompt_body_snapshot`
+  + `summary_prompt_body_snapshot` populated at finalize; worker reads
+  from snapshot. An admin edit to `/admin/prompts` during the Inngest
+  delay cannot change which body Pass 1 + Pass 2 see. Sentinel for
+  legacy rows (`*_body_snapshot IS NULL`) falls back to live read.
+- **State fences everywhere** that touches `discussions.state`.
+  `mark-transcribing` claims via `.eq('state','uploaded').select()` and
+  bails on 0 rows; `save-transcript` commits Pass-1 atomically (`state=
+  'transcribed'` in the same UPDATE as the transcript write); Pass-2 is
+  best-effort — failures land on `summary_status='failed'+summary_error`
+  WITHOUT propagating to `onFailure`; `onFailure` only clobbers
+  `state IN ('uploaded','transcribing')`; SG aggregate flip fenced on
+  `state='transcribed'`; `delete-discussion` is ownership-fenced +
+  idempotent.
+- **Per-participation SG push state.** `participations.super_grader_post_
+  {status,attempted_at,error}` records per-POST outcomes — enables
+  failed-only retries without parsing the aggregate JSONB.
+- **Inngest event_id dedup.** `inngest.send({ id:
+  'discussion-uploaded:${discussionId}', ... })` — duplicate sends within
+  Inngest's window are de-duped upstream of the worker's claim.
+- **Bearer compares use `crypto.timingSafeEqual`** at
+  `lib/peers/auth.ts` with length pre-check + 503 when env var unset.
+- **Google tokens encrypted at rest** via `lib/crypto/secret.ts`
+  (AES-256-GCM; key `TEACHER_GTOKEN_ENC_KEY`). Reads encrypted-first
+  with legacy plaintext fallback; refresh path nulls plaintext so rows
+  converge to encrypted-only over time. `REVOKE UPDATE` on teachers from
+  authenticated except `display_name` + `gemini_daily_cap`.
+- **Retention sweep.** `/api/cron/sweep-discussions` daily 03:00 UTC
+  (vercel.json), two state-fenced passes: archive stuck uploaded/
+  transcribing >14d, hard-delete terminal-state >`RETENTION_MONTHS`
+  (default 13). Storage blob FIRST, then DB row. `/admin/retention`
+  surfaces counts + last-sweep audit + manual SWEEP-to-confirm trigger.
+- **Sentry env-gated** (`instrumentation.ts`, `instrumentation-client.ts`,
+  `lib/telemetry/sentry-init.ts`). DSN unset = no-op. `beforeSend`
+  redacts likely-name shapes (allows `Student_xxxxxx` literal token),
+  strips `request.query_string`. Session Replay intentionally off.
+- **TargetPicker stops auto-clobbering.** `initializedBindingRef` plus
+  sessionStorage persistence keyed by `(courseId, sectionId)` — polling
+  refreshes no longer reset manual de-selections.
+- **Recorder crash recovery.** `lib/recorder/persistence.ts` IndexedDB
+  store; `MediaRecorder.ondataavailable` persists every 1s chunk
+  best-effort; `beforeunload` warning during recording; RecordingFlow
+  scans IDB on mount and surfaces a recovery banner for orphan
+  sessions (Recover reconstitutes the Blob → Recorder renders in
+  "stopped" state with audio playable; Discard clears IDB).
+- **Auto-save single-flight + concurrency fence.** `useAutoSaveForm`
+  queues exactly one follow-up if a save is in flight when a new
+  trigger fires. `saveSystemPrompt` accepts `expected_updated_at`;
+  mismatch returns `{ok:false, conflict:true}`. `AutoSaveProvider`
+  aggregates per-key (`prompt:${id}`) so a quick "saved" from sibling
+  editor can't green-wash another editor's error.
+
+**Operator follow-ups still outstanding** (one-time, post-deploy):
+- `openssl rand -base64 32` → Vercel + `.env.local` as
+  `TEACHER_GTOKEN_ENC_KEY` (without it, new sign-ins fail to write
+  encrypted Google tokens; reads keep working via plaintext fallback).
+- `openssl rand -base64 32` → `CRON_SECRET` (sweep cron auths via
+  Vercel-injected bearer).
+- Backfill existing teachers' plaintext tokens via a one-off Node
+  script (~20 lines, mirrors HAH `9a267bd` shape) — then drop the
+  legacy plaintext columns.
+- `curl -X PUT https://harkness-helper-v2-sgs.vercel.app/api/inngest`
+  after the next deploy (suite-wide post-rename gotcha).
+- (Optional) Provision Sentry project + set `SENTRY_DSN` /
+  `NEXT_PUBLIC_SENTRY_DSN` to start receiving events.
+
 **Save-to-Drive — done.** Per-row Drive menu with Save audio / Save transcript
 / Save summary / Save all to folder (folder named
 `<assignment> · <section> · <date>`). Reuses the Google OAuth client shared
@@ -87,11 +171,25 @@ via `googleapis` SDK when within 5min of expiry.
 
 - Project: `harkness-helper-v2` — ref `zypdhubfmbhcwarjljlp` (us-east-1)
 - Dashboard: <https://supabase.com/dashboard/project/zypdhubfmbhcwarjljlp>
-- 12 migrations: `initial_schema`, `admins_and_prompts`, `canvas_cache`,
-  `gemini_rate_limits`, `discussion_audio_bucket`, `course_roster_sections`,
-  `discussion_per_section`, `teacher_google_tokens`,
-  `two_pass_transcript_summary`, `v1_prompts`, `discussion_roster_snapshot`
-  (M6.22 Phase 0), `rewrite_summary_prompt` (M6.22 Phase 0).
+- 17 migrations: initial schema through `20260516170000_v1_prompts`, then
+  the M6.22 remediation series (all applied 2026-05-22 via Supabase MCP):
+  - `20260522120000_discussion_roster_snapshot` (Phase 0 — `roster_snapshot`
+    jsonb + `scrub_status` text on `discussions`)
+  - `20260522120001_rewrite_summary_prompt` (Phase 0 — drops the
+    "credit students by name" instruction)
+  - `20260522130000_teacher_gtoken_encryption` (Phase 0b —
+    `teachers.google_*_encrypted` text columns alongside legacy plaintext)
+  - `20260522130001_tighten_teachers_update_rls` (Phase 0b — REVOKE
+    UPDATE on teachers + GRANT UPDATE(display_name, gemini_daily_cap))
+  - `20260522140000_retention_archived_state` (Phase 0c —
+    `discussion_state += 'archived'`)
+  - `20260522140001_retention_audits` (Phase 0c — audit log table)
+  - `20260522150000_discussion_prompt_snapshots` (Phase 1 —
+    `transcription_prompt_body_snapshot` + `summary_prompt_body_snapshot`)
+  - `20260522160000_state_fences_and_partial_success` (Phase 2 —
+    `discussions.summary_status` + `summary_error` for partial-success
+    policy; `participations.super_grader_post_*` for per-participant
+    push state)
 - `discussions` composite unique on (canvas_assignment_id, canvas_section_id)
   NULLS NOT DISTINCT so two sections of the same Canvas assignment can each
   have a recording.
@@ -193,4 +291,9 @@ Env vars (all in `.env.example`):
 - Suite peer integration (live as of Phase D): `SUPER_GRADER_SALT`,
   `SUPER_GRADER_API_URL`, `SUPER_GRADER_INGEST_TOKEN`, `HARKNESS_API_TOKEN`,
   `NEXT_PUBLIC_APP_URL`
+- M6.22 Phase 0b — at-rest Google-token encryption: `TEACHER_GTOKEN_ENC_KEY`
+  (`openssl rand -base64 32`; required for new sign-ins to write encrypted
+  tokens; reads continue to work via plaintext fallback when unset)
+- M6.22 Phase 0c — retention sweep: `CRON_SECRET` (Vercel-injected bearer
+  for `/api/cron/sweep-discussions`), `RETENTION_MONTHS` (default 13)
 - Sentry (optional): `SENTRY_DSN`, `NEXT_PUBLIC_SENTRY_DSN`
