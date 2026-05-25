@@ -9,6 +9,11 @@ export type HarknessSummary = {
   audio_url?: string | null;
   transcript?: string | null;
   suggested_summary?: string | null;
+  /** M7.9 — Drive webViewLink for the auto-created Google Doc
+   *  (M7.5). Doc body = scrubbed summary + scrubbed transcript.
+   *  Optional for backwards compatibility with envelopes built
+   *  before M7.9 / before the discussion was auto-saved to Drive. */
+  google_doc_url?: string | null;
 };
 
 export type HarknessEnvelope = {

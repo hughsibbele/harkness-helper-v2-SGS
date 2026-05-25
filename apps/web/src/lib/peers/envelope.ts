@@ -29,7 +29,7 @@ export async function buildHarknessEnvelopeForCanvasIds(
   //    not distinct, per 20260516140000_discussion_per_section.sql).
   const { data: discussions, error: discussionsErr } = await admin
     .from("discussions")
-    .select("id, audio_url, transcript, summary, updated_at")
+    .select("id, audio_url, transcript, summary, drive_doc_url, updated_at")
     .eq("canvas_assignment_id", canvasAssignmentId)
     .in("state", ["transcribed", "posted_to_super_grader"])
     .order("updated_at", { ascending: false });
@@ -95,6 +95,10 @@ export async function buildHarknessEnvelopeForCanvasIds(
       audio_url: signedAudioUrl,
       transcript: winner.transcript,
       suggested_summary: winner.summary,
+      // M7.9 — Drive doc link (M7.5 sets drive_doc_url on the row when
+      // save-to-drive lands). Optional — older transcribed rows that
+      // pre-date M7.5 send the field as null.
+      google_doc_url: winner.drive_doc_url ?? null,
     },
     links: {
       detail_url: `${appUrl}/dashboard`,
