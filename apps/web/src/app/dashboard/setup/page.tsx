@@ -92,6 +92,15 @@ export default async function SetupPage() {
           <strong>Harkness Helper</strong> folder; the manual &ldquo;Save
           to Drive&rdquo; menu on each row is still available.
         </p>
+        <p className="mb-3 text-xs text-cool-gray">
+          <strong>Want everything in a shared folder?</strong> Drag the{" "}
+          <strong>Harkness Helper</strong> folder anywhere in your Drive
+          — into a shared course folder, into a subfolder, or rename it.
+          Future discussion docs will keep landing in the same folder;
+          the link stays valid. If you trash it, a fresh one is
+          auto-created in your Drive root on the next transcription (and
+          you can move that one too).
+        </p>
 
         <dl className="mb-3 grid grid-cols-[8rem_1fr] gap-y-1 text-xs">
           <dt className="text-cool-gray">Status</dt>
