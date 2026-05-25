@@ -60,6 +60,7 @@ export default async function AdminLayout({
       {/* Dark-blue rule (vs. light-blue on /dashboard) so admin sessions feel
           visually distinct. */}
       <BrandHeader
+        title="Harkness Helper"
         logoHref="/admin"
         ruleClassName="h-0.5 border-0 bg-dark-blue"
         right={nav}

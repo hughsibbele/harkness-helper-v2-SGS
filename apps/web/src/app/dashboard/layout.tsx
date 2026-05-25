@@ -49,7 +49,7 @@ export default async function DashboardLayout({
 
   return (
     <div className="flex min-h-screen flex-col bg-paper">
-      <BrandHeader logoHref="/dashboard" right={nav} />
+      <BrandHeader title="Harkness Helper" logoHref="/dashboard" right={nav} />
       <main className="flex-1 px-6 py-8">{children}</main>
       <footer className="border-t border-light-blue/40 bg-white/50 px-6 py-3 text-center text-xs italic text-cool-gray">
         Harkness Helper v2 &middot; Episcopal High School

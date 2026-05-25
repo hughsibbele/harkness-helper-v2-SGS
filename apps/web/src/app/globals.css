@@ -13,7 +13,7 @@
   --color-ink: #1a1a1a;
 
   --font-display: var(--font-lora), Georgia, "Times New Roman", serif;
-  --font-body: var(--font-lora), Georgia, "Times New Roman", serif;
+  --font-body: var(--font-geist-sans), system-ui, sans-serif;
   --font-document: Georgia, "Times New Roman", serif;
 }
 

@@ -1,6 +1,12 @@
 import type { Metadata } from "next";
+import { Geist } from "next/font/google";
 import { Lora } from "next/font/google";
 import "./globals.css";
+
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+});
 
 const lora = Lora({
   variable: "--font-lora",
@@ -21,7 +27,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${lora.variable} h-full`}>
+    <html lang="en" className={`${geistSans.variable} ${lora.variable} h-full`}>
       <body className="min-h-full">{children}</body>
     </html>
   );
