@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@google/genai": "^2.3.0",
+    "@google/genai": "^2.6.0",
     "@harkness-helper/anonymizer": "workspace:*",
     "@harkness-helper/canvas": "workspace:*",
     "@harkness-helper/db": "workspace:*",
@@ -18,7 +18,7 @@
     "@sentry/nextjs": "^10.53.1",
     "@supabase/ssr": "^0.10.2",
     "@supabase/supabase-js": "^2.102.1",
-    "googleapis": "^171.4.0",
+    "googleapis": "^172.0.0",
     "inngest": "^4.4.0",
     "next": "16.2.6",
     "react": "19.2.4",
