@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
-/* EHS brand tokens. Mirrors the AI Documenter v2 palette so the satellite
- * apps feel like one product family at EHS. */
+/* EHS brand tokens — canonical palette shared across the super-grader
+ * suite. These values mirror the school style guide. */
 @theme {
   --color-maroon: #7a1e46;
   --color-maroon-dark: #5a1535;
@@ -12,8 +12,8 @@
   --color-paper: #fafaf7;
   --color-ink: #1a1a1a;
 
-  --font-display: Georgia, "Times New Roman", serif;
-  --font-body: Georgia, "Times New Roman", serif;
+  --font-display: var(--font-lora), Georgia, "Times New Roman", serif;
+  --font-body: var(--font-lora), Georgia, "Times New Roman", serif;
   --font-document: Georgia, "Times New Roman", serif;
 }
 
@@ -23,8 +23,7 @@
   color-scheme: light;
 }
 
-html,
-body {
+html, body {
   height: 100%;
 }
 
@@ -43,6 +42,12 @@ body {
   background: var(--color-light-blue);
   border: 0;
 }
+.ehs-rule-maroon {
+  display: block;
+  height: 2px;
+  background: var(--color-maroon);
+  border: 0;
+}
 
 .ehs-eyebrow {
   font-family: var(--font-document);
@@ -53,9 +58,9 @@ body {
   color: var(--color-cool-gray);
 }
 
+/* Focus rings — maroon at 60% opacity, no blue browser default. */
 *:focus-visible {
-  outline: 2px solid
-    color-mix(in oklch, var(--color-maroon) 60%, transparent);
+  outline: 2px solid color-mix(in oklch, var(--color-maroon) 60%, transparent);
   outline-offset: 2px;
   border-radius: 2px;
 }
