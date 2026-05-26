@@ -108,7 +108,17 @@ export async function GET(request: NextRequest) {
   const dest = request.nextUrl.clone();
   dest.pathname = next.startsWith("/") ? next : "/dashboard";
   dest.search = "";
-  return NextResponse.redirect(dest);
+  const response = NextResponse.redirect(dest);
+  if (session?.provider_refresh_token) {
+    response.cookies.set("_grt", "1", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 365 * 24 * 60 * 60,
+      path: "/",
+    });
+  }
+  return response;
 }
 
 function redirectWithError(request: NextRequest, message: string) {
