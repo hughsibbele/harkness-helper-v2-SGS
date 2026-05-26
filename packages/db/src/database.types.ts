@@ -334,6 +334,7 @@ export type Database = {
           canvas_course_id: string;
           name: string;
           course_code: string | null;
+          short_name: string | null;
           workflow_state: string;
           start_at: string | null;
           end_at: string | null;
@@ -347,6 +348,7 @@ export type Database = {
           canvas_course_id: string;
           name: string;
           course_code?: string | null;
+          short_name?: string | null;
           workflow_state: string;
           start_at?: string | null;
           end_at?: string | null;

@@ -41,7 +41,7 @@ export default async function DashboardPage() {
     await Promise.all([
       supabase
         .from("canvas_course_cache")
-        .select("canvas_course_id,name,course_code")
+        .select("canvas_course_id,name,course_code,short_name")
         .eq("teacher_id", teacher.id)
         .order("name"),
       supabase
@@ -68,6 +68,7 @@ export default async function DashboardPage() {
     canvas_course_id: c.canvas_course_id,
     name: c.name,
     course_code: c.course_code,
+    short_name: c.short_name,
   }));
   const assignments: AssignmentOption[] = (assignmentsRes.data ?? []).map((a) => ({
     canvas_course_id: a.canvas_course_id,
@@ -91,7 +92,7 @@ export default async function DashboardPage() {
 
   const courseLabelById: Record<string, string> = {};
   for (const c of courses) {
-    courseLabelById[c.canvas_course_id] = c.course_code ?? c.name;
+    courseLabelById[c.canvas_course_id] = c.short_name ?? c.course_code ?? c.name;
   }
   const assignmentLabelById: Record<string, string> = {};
   for (const a of assignments) {

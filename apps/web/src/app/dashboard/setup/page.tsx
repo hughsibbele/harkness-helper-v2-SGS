@@ -1,14 +1,23 @@
 import { getCurrentTeacher } from "@/lib/auth/teacher";
 import { isAdmin } from "@/lib/auth/admin";
+import { getServerDbClient } from "@/lib/supabase/server";
 import { TestCanvasButton } from "./TestCanvasButton";
 import { CanvasCommentToggle } from "./CanvasCommentToggle";
+import { CourseNicknameEditor } from "./CourseNicknameEditor";
 
 export default async function SetupPage() {
   const teacher = await getCurrentTeacher();
   const admin = await isAdmin();
 
+  const supabase = await getServerDbClient();
   const canvasHost = process.env.CANVAS_BASE_URL ?? "(not set)";
   const canvasTokenPresent = Boolean(process.env.CANVAS_API_TOKEN);
+
+  const { data: coursesData } = await supabase
+    .from("canvas_course_cache")
+    .select("canvas_course_id,name,course_code,short_name")
+    .eq("teacher_id", teacher.id)
+    .order("name");
 
   // M7.2 — Drive-connected check post-M6.22 Phase 0b: tokens land in
   // *_encrypted columns; the plaintext columns are nulled. Read both
@@ -80,6 +89,16 @@ export default async function SetupPage() {
             </a>
           </div>
         )}
+      </section>
+
+      {/* Course nicknames */}
+      <section className="rounded-md border border-stone-200 bg-white p-5 space-y-3">
+        <h2 className="text-sm font-semibold text-ink">Course short names</h2>
+        <p className="text-xs text-cool-gray">
+          Short names appear in the course picker and discussion labels.
+          Leave blank to use the Canvas course code.
+        </p>
+        <CourseNicknameEditor courses={coursesData ?? []} />
       </section>
 
       {/* Drive */}

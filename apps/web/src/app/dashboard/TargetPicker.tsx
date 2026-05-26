@@ -49,6 +49,7 @@ export type CourseOption = {
   canvas_course_id: string;
   name: string;
   course_code: string | null;
+  short_name: string | null;
 };
 
 export type AssignmentOption = {
@@ -245,7 +246,7 @@ export function TargetPicker({
               selected={c.canvas_course_id === courseId}
               onClick={() => pickCourse(c.canvas_course_id)}
             >
-              {c.course_code ?? c.name}
+              {c.short_name ?? c.course_code ?? c.name}
             </Chip>
           ))}
         </div>
@@ -379,7 +380,7 @@ export function TargetPicker({
           </span>{" "}
           in{" "}
           <span className="font-medium not-italic text-ink">
-            {selectedCourse.course_code ?? selectedCourse.name}
+            {selectedCourse.short_name ?? selectedCourse.course_code ?? selectedCourse.name}
           </span>
           {participantIds.size > 0 && (
             <>
