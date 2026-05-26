@@ -23,7 +23,7 @@ export default async function DashboardLayout({
         href="/dashboard/setup"
         className="text-ink transition-colors hover:text-maroon"
       >
-        Canvas &amp; Drive
+        Setup
       </Link>
       {showAdminLink && (
         <Link

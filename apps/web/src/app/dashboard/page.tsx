@@ -5,6 +5,7 @@ import { bulkSuperGraderScope } from "@/lib/super-grader/scope";
 import { CanvasSyncButton } from "./CanvasSyncButton";
 import { DiscussionList, type DiscussionListRow } from "./DiscussionList";
 import { RecordingFlow } from "./RecordingFlow";
+import { TeacherGuide } from "./TeacherGuide";
 import type {
   AssignmentOption,
   CourseOption,
@@ -142,10 +143,9 @@ export default async function DashboardPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
-      <header>
-        <h1 className="text-xl font-medium text-ink">
-          Welcome, {teacher.display_name}
-        </h1>
+      <header className="flex flex-wrap items-baseline justify-between gap-3">
+        <h1 className="text-xl font-medium text-ink">Your discussions</h1>
+        <TeacherGuide />
       </header>
 
       <RecordingFlow
