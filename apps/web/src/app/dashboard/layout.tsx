@@ -14,12 +14,6 @@ export default async function DashboardLayout({
   const nav = (
     <nav className="flex flex-wrap items-center justify-end gap-x-5 gap-y-2 text-sm">
       <Link
-        href="/dashboard"
-        className="text-ink transition-colors hover:text-maroon"
-      >
-        Dashboard
-      </Link>
-      <Link
         href="/dashboard/setup"
         className="text-ink transition-colors hover:text-maroon"
       >
