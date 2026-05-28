@@ -8,36 +8,30 @@ import {
   listCourseSections,
   listCourseStudentEnrollments,
   listCourseStudentUsers,
-  normalizeHost,
   type CanvasConfig,
 } from "@harkness-helper/canvas";
 import { createAdminDbClient } from "@harkness-helper/db/admin";
 import { getCurrentTeacher } from "@/lib/auth/teacher";
+import {
+  CanvasNotConnectedError,
+  loadTeacherCanvasConfig,
+} from "@/lib/canvas/teacher-config";
 import type { CanvasSyncResult } from "./canvas-sync.types";
-
-function loadCanvasConfig(): CanvasConfig {
-  const host = process.env.CANVAS_BASE_URL;
-  const token = process.env.CANVAS_API_TOKEN;
-  if (!host) {
-    throw new Error(
-      "CANVAS_BASE_URL is not set. Add it to apps/web/.env.local.",
-    );
-  }
-  if (!token) {
-    throw new Error(
-      "CANVAS_API_TOKEN is not set. Add it to apps/web/.env.local.",
-    );
-  }
-  return { host: normalizeHost(host), token };
-}
 
 export async function syncCanvasCache(): Promise<CanvasSyncResult> {
   const teacher = await getCurrentTeacher();
 
   let config: CanvasConfig;
   try {
-    config = loadCanvasConfig();
+    config = await loadTeacherCanvasConfig(teacher.id);
   } catch (err) {
+    if (err instanceof CanvasNotConnectedError) {
+      return {
+        ok: false,
+        message:
+          "Canvas not connected. Paste your API token on /dashboard/setup before syncing.",
+      };
+    }
     return {
       ok: false,
       message: err instanceof Error ? err.message : "Canvas config error",

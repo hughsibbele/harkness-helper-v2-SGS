@@ -34,6 +34,8 @@ export type Database = {
           google_token_expires_at: string | null;
           drive_folder_id: string | null;
           canvas_comment_enabled: boolean;
+          canvas_token_encrypted: string | null;
+          canvas_host: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -52,6 +54,8 @@ export type Database = {
           google_token_expires_at?: string | null;
           drive_folder_id?: string | null;
           canvas_comment_enabled?: boolean;
+          canvas_token_encrypted?: string | null;
+          canvas_host?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -70,6 +74,8 @@ export type Database = {
           google_token_expires_at?: string | null;
           drive_folder_id?: string | null;
           canvas_comment_enabled?: boolean;
+          canvas_token_encrypted?: string | null;
+          canvas_host?: string | null;
           created_at?: string;
           updated_at?: string;
         };

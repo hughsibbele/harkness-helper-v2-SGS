@@ -1,30 +1,28 @@
 import { getCurrentTeacher } from "@/lib/auth/teacher";
-import { isAdmin } from "@/lib/auth/admin";
+import { disconnectCanvas } from "@/lib/actions/canvas-token";
 import { getServerDbClient } from "@/lib/supabase/server";
+import { ConnectForm } from "./ConnectForm";
 import { TestCanvasButton } from "./TestCanvasButton";
 import { CanvasCommentToggle } from "./CanvasCommentToggle";
 import { CourseNicknameEditor } from "./CourseNicknameEditor";
 
 export default async function SetupPage() {
   const teacher = await getCurrentTeacher();
-  const admin = await isAdmin();
+
+  const canvasConnected = Boolean(
+    teacher.canvas_token_encrypted && teacher.canvas_host,
+  );
 
   const supabase = await getServerDbClient();
-  const canvasHost = process.env.CANVAS_BASE_URL ?? "(not set)";
-  const canvasTokenPresent = Boolean(process.env.CANVAS_API_TOKEN);
-
   const { data: coursesData } = await supabase
     .from("canvas_course_cache")
     .select("canvas_course_id,name,course_code,short_name")
     .eq("teacher_id", teacher.id)
     .order("name");
 
-  // M7.2 — Drive-connected check post-M6.22 Phase 0b: tokens land in
-  // *_encrypted columns; the plaintext columns are nulled. Read both
-  // shapes so legacy + post-encryption teachers both show as connected.
   const driveConnected = Boolean(
-    (teacher.google_access_token_encrypted ?? teacher.google_access_token) &&
-      (teacher.google_refresh_token_encrypted ?? teacher.google_refresh_token),
+    teacher.google_access_token_encrypted &&
+      teacher.google_refresh_token_encrypted,
   );
   const driveFolderUrl = teacher.drive_folder_id
     ? `https://drive.google.com/drive/folders/${teacher.drive_folder_id}`
@@ -43,52 +41,66 @@ export default async function SetupPage() {
       </div>
 
       {/* Canvas */}
-      <section className="rounded-md border border-stone-200 bg-white p-5 text-sm">
-        <h2 className="mb-2 text-sm font-semibold text-ink">Canvas</h2>
-        <p className="mb-3 text-xs text-cool-gray">
-          HH currently uses a single shared Canvas API token for the whole
-          school (single-tenant by design). The token + host live as
-          environment variables on Vercel — only an admin can update them.
-        </p>
+      <section className="rounded-md border border-stone-200 bg-white p-5 text-sm space-y-4">
+        <h2 className="text-sm font-semibold text-ink">Canvas</h2>
 
-        <dl className="mb-3 grid grid-cols-[8rem_1fr] gap-y-1 text-xs">
-          <dt className="text-cool-gray">Host</dt>
-          <dd>
-            <code className="rounded bg-paper px-1">{canvasHost}</code>
-          </dd>
-          <dt className="text-cool-gray">Token</dt>
-          <dd>
-            {canvasTokenPresent ? (
-              <span className="text-emerald-800">set</span>
-            ) : (
-              <span className="text-red-700">missing</span>
-            )}
-          </dd>
-        </dl>
-
-        <TestCanvasButton />
-
-        {admin && (
-          <div className="mt-4 rounded border border-dashed border-stone-300 bg-stone-50 p-3 text-xs text-stone-700">
-            <p className="mb-1 font-medium text-stone-900">
-              Token rotation (admin)
-            </p>
-            <p className="mb-2 leading-relaxed">
-              Update on the HH Vercel project under Settings → Environment
-              Variables. After updating, redeploy so the new value reaches
-              running serverless functions. Per-teacher Canvas tokens are
-              tracked as a future harmonization task.
-            </p>
-            <a
-              href="https://vercel.com/dashboard"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-maroon hover:underline"
-            >
-              Open Vercel dashboard →
-            </a>
+        {canvasConnected ? (
+          <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-xs">
+            <div className="flex items-center gap-2 font-medium text-emerald-900">
+              <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+              Connected
+            </div>
+            <div className="mt-1 text-emerald-800">
+              Authenticated on{" "}
+              <code className="rounded bg-white/60 px-1 font-mono">
+                {teacher.canvas_host}
+              </code>
+              . Token is encrypted at rest.
+            </div>
+            <form action={disconnectCanvas} className="mt-2">
+              <button
+                type="submit"
+                className="text-xs font-medium text-emerald-900 underline underline-offset-2 hover:text-emerald-700"
+              >
+                Disconnect
+              </button>
+            </form>
+          </div>
+        ) : (
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs">
+            <div className="flex items-center gap-2 font-medium text-amber-900">
+              <span className="inline-flex h-2 w-2 rounded-full bg-amber-500" />
+              Not connected
+            </div>
+            <div className="mt-1 text-amber-800">
+              Generate a Canvas access token and paste it below to enable
+              course listings, roster sync, and draft-comment posting.
+            </div>
           </div>
         )}
+
+        <div className="rounded-md border border-stone-200 bg-paper p-3 text-xs">
+          <p className="mb-2 font-medium text-stone-900">
+            {canvasConnected ? "Replace token" : "Connect Canvas"}
+          </p>
+          <ol className="mb-3 list-decimal space-y-1 pl-5 leading-relaxed text-cool-gray">
+            <li>
+              Open Canvas → <em>Account</em> → <em>Settings</em>.
+            </li>
+            <li>
+              Scroll to <em>Approved Integrations</em> and click{" "}
+              <em>+ New Access Token</em>.
+            </li>
+            <li>
+              Give it a name like &ldquo;Harkness Helper&rdquo;, leave the
+              expiration blank, click <em>Generate Token</em>, and copy the
+              value (Canvas only shows it once).
+            </li>
+          </ol>
+          <ConnectForm />
+        </div>
+
+        {canvasConnected && <TestCanvasButton />}
       </section>
 
       {/* Course nicknames */}

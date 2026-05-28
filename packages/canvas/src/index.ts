@@ -297,8 +297,8 @@ export async function listCourseSections(
  * editable-drafts pane (visible to the teacher; hidden from the student
  * until the teacher posts it).
  *
- * Authored by the configured `CANVAS_API_TOKEN` owner (HH is
- * single-tenant — same token across all teachers). No `as_user_id`
+ * Authored by the discussion's own teacher, using their per-teacher
+ * Canvas token from `teachers.canvas_token_encrypted`. No `as_user_id`
  * masquerade — HH doesn't post as the student.
  *
  * Canvas API contract (verified against `instructure/canvas-lms`'s

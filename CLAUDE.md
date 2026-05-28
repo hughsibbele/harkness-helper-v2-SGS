@@ -286,8 +286,10 @@ Env vars (all in `.env.example`):
 - Admin bootstrap: `INITIAL_ADMIN_EMAIL`, `ADMIN_EMAIL_DOMAIN`
 - Gemini: `GEMINI_API_KEY` (per-app — HK has its own), `GEMINI_DEFAULT_DAILY_CAP`
 - Inngest: `INNGEST_DEV=1` (local) OR `INNGEST_EVENT_KEY` + `INNGEST_SIGNING_KEY` (prod)
-- Canvas: `CANVAS_BASE_URL`, `CANVAS_API_TOKEN` (single-tenant by design;
-  per-teacher token storage is a future M2a follow-up)
+- Canvas: per-teacher tokens on `teachers.canvas_token_encrypted` +
+  `teachers.canvas_host`, encrypted with `TEACHER_GTOKEN_ENC_KEY` (shared
+  with `google_*_encrypted` per Phase 0b). Set via `/dashboard/setup` →
+  Connect Canvas. No env vars to configure.
 - Suite peer integration (live as of Phase D): `SUPER_GRADER_SALT`,
   `SUPER_GRADER_API_URL`, `SUPER_GRADER_INGEST_TOKEN`, `HARKNESS_API_TOKEN`,
   `NEXT_PUBLIC_APP_URL`

@@ -3,9 +3,12 @@
 //
 // Per-class granularity: the same draft comment text (carrying the
 // Drive doc link) is posted to every participant's submission for the
-// discussion's Canvas assignment. Drafts are author-scoped — the
-// configured CANVAS_API_TOKEN owner is the author across the suite (HH
-// is single-tenant Canvas).
+// discussion's Canvas assignment.
+//
+// Drafts are author-scoped — as of the per-teacher-token migration the
+// author is the discussion's own teacher, not a shared school account.
+// Token is loaded from `teachers.canvas_token_encrypted` via the admin
+// client; failure to decrypt or unset-token = skipped with a clear reason.
 //
 // Returns the per-participant outcome aggregate so the worker can
 // persist `canvas_comment_post_status` + `canvas_comment_error`. Best-
@@ -13,6 +16,10 @@
 
 import { postTeacherDraftComment } from "@harkness-helper/canvas";
 import { createAdminDbClient } from "@harkness-helper/db/admin";
+import {
+  CanvasNotConnectedError,
+  loadTeacherCanvasConfig,
+} from "@/lib/canvas/teacher-config";
 
 type PostOutcome =
   | { kind: "skipped"; reason: string }
@@ -26,15 +33,6 @@ export async function postDiscussionDraftComments(args: {
   discussionId: string;
   driveDocUrl: string;
 }): Promise<PostOutcome> {
-  const baseUrl = process.env.CANVAS_BASE_URL;
-  const token = process.env.CANVAS_API_TOKEN;
-  if (!baseUrl || !token) {
-    return {
-      kind: "skipped",
-      reason: "CANVAS_BASE_URL / CANVAS_API_TOKEN unset",
-    };
-  }
-
   const admin = createAdminDbClient();
 
   // Load discussion + per-teacher enabled flag + participants in one
@@ -56,6 +54,22 @@ export async function postDiscussionDraftComments(args: {
     : (discussion.teachers as TeacherJoin | null);
   if (!teacher?.canvas_comment_enabled) {
     return { kind: "skipped", reason: "canvas_comment_enabled is false" };
+  }
+
+  let config;
+  try {
+    config = await loadTeacherCanvasConfig(discussion.teacher_id);
+  } catch (err) {
+    if (err instanceof CanvasNotConnectedError) {
+      return {
+        kind: "skipped",
+        reason: "teacher has no Canvas token configured",
+      };
+    }
+    return {
+      kind: "skipped",
+      reason: `canvas config load: ${err instanceof Error ? err.message : String(err)}`,
+    };
   }
 
   const { data: participations, error: partErr } = await admin
@@ -91,10 +105,6 @@ export async function postDiscussionDraftComments(args: {
     return { kind: "skipped", reason: "no participants" };
   }
 
-  const config = {
-    host: baseUrl.replace(/^https?:\/\//, "").replace(/\/$/, ""),
-    token,
-  };
   const text = composeCommentText(args.driveDocUrl);
 
   const posted_for: string[] = [];

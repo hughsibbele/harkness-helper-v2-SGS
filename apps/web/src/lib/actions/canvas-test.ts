@@ -1,39 +1,40 @@
 "use server";
 
-import {
-  CanvasError,
-  getSelf,
-  normalizeHost,
-  type CanvasConfig,
-} from "@harkness-helper/canvas";
+import { CanvasError, getSelf } from "@harkness-helper/canvas";
 import { getCurrentTeacher } from "@/lib/auth/teacher";
+import {
+  CanvasNotConnectedError,
+  loadTeacherCanvasConfig,
+} from "@/lib/canvas/teacher-config";
 
 export type TestCanvasResult =
   | { ok: true; userName: string; userId: number; host: string }
   | { ok: false; error: string };
 
 /**
- * Verify the shared Canvas token still works by calling /users/self.
+ * Verify the teacher's saved Canvas token still works by calling /users/self.
  *
- * HH is single-tenant by design (one shared CANVAS_API_TOKEN env var on
- * Vercel rather than per-teacher tokens). When the key rotates or the
- * token expires, sync silently fails — surface a Test button on the
- * setup page so the failure mode is one click away.
+ * Per-teacher tokens (M7.x) live on `teachers.canvas_token_encrypted`. When
+ * the token rotates, expires, or has never been set, surface the failure
+ * clearly so the teacher knows to re-paste it on /dashboard/setup.
  */
 export async function testCanvasConnection(): Promise<TestCanvasResult> {
-  await getCurrentTeacher(); // ensure signed in
-  const rawHost = process.env.CANVAS_BASE_URL;
-  const token = process.env.CANVAS_API_TOKEN;
-  if (!rawHost) return { ok: false, error: "CANVAS_BASE_URL is not set." };
-  if (!token) return { ok: false, error: "CANVAS_API_TOKEN is not set." };
+  const teacher = await getCurrentTeacher();
 
-  let config: CanvasConfig;
+  let config;
   try {
-    config = { host: normalizeHost(rawHost), token };
+    config = await loadTeacherCanvasConfig(teacher.id);
   } catch (err) {
+    if (err instanceof CanvasNotConnectedError) {
+      return {
+        ok: false,
+        error:
+          "Canvas not connected. Paste your API token in the section above.",
+      };
+    }
     return {
       ok: false,
-      error: err instanceof Error ? err.message : "Invalid CANVAS_BASE_URL.",
+      error: err instanceof Error ? err.message : "Canvas config error.",
     };
   }
 
